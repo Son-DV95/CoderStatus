@@ -6,6 +6,7 @@ import HtopMonitor from './components/HtopMonitor';
 import SystemSensorsComp from './components/SystemSensors';
 import AgyPanel from './components/AgyPanel';
 import TerminalCLI from './components/TerminalCLI';
+import LofiPlayer from './components/LofiPlayer';
 import { playBootSweep, setSoundEnabled, playBeep, playSuccessChime, playTick, playErrorBuzz } from './utils/audio';
 import { Shield, Sparkles, Terminal as TerminalIcon, Calendar, CheckCircle2, Flame, RefreshCw } from 'lucide-react';
 
@@ -113,12 +114,8 @@ export default function App() {
   const [agents, setAgents] = useState<AgyAgent[]>(defaultAgents);
 
   // Real stack system info states
-  const [dataSource, setDataSource] = useState<'SERVER' | 'LOCAL'>('SERVER');
+  const dataSource = 'SERVER';
   const [serverInfo, setServerInfo] = useState<any>(null);
-  const [localAgentInfo, setLocalAgentInfo] = useState<any>(null);
-  const [copiedCmd, setCopiedCmd] = useState(false);
-  const [showManualGuide, setShowManualGuide] = useState(false);
-  const [copiedManual, setCopiedManual] = useState(false);
 
   // Terminal command logs state
   const [logs, setLogs] = useState<TerminalLog[]>(() => {
@@ -144,7 +141,7 @@ export default function App() {
       {
         id: 'initial-boot-3',
         timestamp: new Date().toLocaleTimeString('vi', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-        text: 'HƯỚNG DẪN: Chạy lệnh curl được định dạng riêng ở panel để monitor live máy Debian của bạn!',
+        text: 'HỆ THỐNG: Đang đồng bộ hóa chỉ số hiệu năng trực tiếp của Server Host.',
         type: 'system'
       }
     ];
@@ -178,11 +175,9 @@ export default function App() {
         const data = await res.json();
         if (active && data.success) {
           setServerInfo(data);
-          if (dataSource === 'SERVER') {
-            setSensors(data.sensors);
-            if (data.processes) {
-              setProcesses(data.processes);
-            }
+          setSensors(data.sensors);
+          if (data.processes) {
+            setProcesses(data.processes);
           }
         }
       } catch (e) {
@@ -196,68 +191,7 @@ export default function App() {
       active = false;
       clearInterval(interval);
     };
-  }, [dataSource]);
-
-  // Poll local machine agent
-  useEffect(() => {
-    let active = true;
-    let registeredConnected = false;
-
-    const fetchAgent = async () => {
-      try {
-        const res = await fetch('/api/agent-data');
-        const data = await res.json();
-        if (active) {
-          const wasActive = localAgentInfo?.active;
-          setLocalAgentInfo(data);
-
-          if (data.active) {
-            if (!wasActive && !registeredConnected) {
-              registeredConnected = true;
-              logsTerminal(`[DEBIAN AGENT]: Phát hiện liên kết thành công từ Máy Local: "${data.data.hostname}" (${data.data.os})!`, 'success');
-              // Auto-switch to enjoy the live local stream
-              setDataSource('LOCAL');
-            }
-
-            if (dataSource === 'LOCAL') {
-              const client = data.data;
-              setSensors({
-                cpuTemp: 46 + Math.round(Math.random() * 6), // estimates context
-                gpuTemp: 41 + Math.round(Math.random() * 5),
-                fanSpeed: client.cpuLoad > 60 ? 2800 : 1650,
-                powerDraw: Math.round(25 + client.cpuLoad * 1.6),
-                cpuLoad: client.cpuLoad,
-                ramUsed: client.ramUsed,
-                ramTotal: client.ramTotal,
-                diskUsed: client.diskUsed,
-                networkKbps: {
-                  up: 20 + Math.floor(Math.random() * 80),
-                  down: 100 + Math.floor(Math.random() * 400)
-                }
-              });
-              if (client.processes && client.processes.length > 0) {
-                setProcesses(client.processes);
-              }
-            }
-          } else {
-            if (wasActive) {
-              logsTerminal(`[DEBIAN AGENT]: Kết nối với Máy Local đã bị ngắt (Timeout). Quay về Server Host.`, 'error');
-              setDataSource('SERVER');
-            }
-          }
-        }
-      } catch (e) {
-        // Ignore
-      }
-    };
-
-    fetchAgent();
-    const interval = setInterval(fetchAgent, 3000);
-    return () => {
-      active = false;
-      clearInterval(interval);
-    };
-  }, [dataSource, localAgentInfo?.active, logsTerminal]);
+  }, []);
 
   // Save tasks to LocalStorage automatically when modified
   useEffect(() => {
@@ -440,285 +374,8 @@ export default function App() {
           onToggleSound={handleToggleSound}
         />
 
-        {/* Telemetry Hardware Source Selector block */}
-        <section className="bg-zinc-950 border border-zinc-800 rounded-sm p-4 font-mono shadow-md flex flex-col gap-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                <h2 className="text-xs font-bold text-white uppercase tracking-wider">
-                  THIẾT LẬP NGUỒN SỐ LIỆU PHẦN CỨNG THẬT (TELEMETRY SOURCE)
-                </h2>
-              </div>
-              <p className="text-[10px] text-zinc-400">
-                Chế độ hiện tại: <b className="text-zinc-200">
-                  {dataSource === 'SERVER' 
-                    ? `🌐 Server Container [${serverInfo?.os || 'Debian / Linux'}] (Hostname: ${serverInfo?.hostname || 'host'})` 
-                    : `💻 Máy Local Debian [${localAgentInfo?.data?.hostname || 'Unknown'}] (${localAgentInfo?.data?.os || 'OS Specs'})`}
-                </b>
-              </p>
-            </div>
-
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-              {/* Tabs button */}
-              <div className="bg-zinc-900 p-0.5 rounded-sm border border-zinc-800 flex items-center">
-                <button
-                  onClick={() => {
-                    setDataSource('SERVER');
-                    playTick();
-                    logsTerminal('Chuyển luồng đọc dữ liệu sang Server Container Host.', 'system');
-                  }}
-                  className={`px-3 py-1 text-[10px] font-bold rounded-sm transition-all cursor-pointer uppercase ${
-                    dataSource === 'SERVER' 
-                      ? 'bg-zinc-800 text-white border border-zinc-700 shadow-sm' 
-                      : 'text-zinc-500 hover:text-zinc-300 border border-transparent'
-                  }`}
-                >
-                  🌐 Server (Container Host)
-                </button>
-                <button
-                  onClick={() => {
-                    if (localAgentInfo?.active) {
-                      setDataSource('LOCAL');
-                      playTick();
-                      logsTerminal(`Kết nối thành công. Đang stream số liệu máy local: ${localAgentInfo.data.hostname}`, 'success');
-                    } else {
-                      playErrorBuzz();
-                      logsTerminal('Chưa có tín hiệu gửi từ máy Local. Vui lòng chạy bằng Script Thủ Công (Manual) ở dưới để đẩy dữ liệu!', 'error');
-                    }
-                  }}
-                  className={`px-3 py-1 text-[10px] font-bold rounded-sm transition-all cursor-pointer uppercase flex items-center gap-1.5 ${
-                    dataSource === 'LOCAL' 
-                      ? 'bg-zinc-800 text-white border border-zinc-700 shadow-sm' 
-                      : localAgentInfo?.active
-                        ? 'text-emerald-400 hover:text-emerald-300 border border-transparent'
-                        : 'text-zinc-500 hover:text-zinc-300 border border-transparent'
-                  }`}
-                >
-                  💻 Máy Debian {localAgentInfo?.active && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block"></span>}
-                </button>
-              </div>
-
-              {/* Curl Agent command */}
-              <div className="flex flex-col xs:flex-row items-stretch sm:items-center gap-2">
-                <div className="bg-zinc-900 border border-zinc-800 rounded-sm px-2.5 py-1.5 flex items-center justify-between gap-3 max-w-sm sm:max-w-md">
-                  <div className="font-mono text-[9px] text-zinc-400 select-all truncate">
-                    curl -sL {typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}` : ''}/agent.sh | bash
-                  </div>
-                  <button
-                    onClick={() => {
-                      try {
-                        const protocol = window.location.protocol;
-                        const host = window.location.host;
-                        navigator.clipboard.writeText(`curl -sL ${protocol}//${host}/agent.sh | bash`);
-                        setCopiedCmd(true);
-                        playBeep(900, 0.1, 0.05);
-                        setTimeout(() => setCopiedCmd(false), 2000);
-                      } catch (e) {}
-                    }}
-                    className="text-[9px] px-2 py-0.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-100 uppercase rounded-sm cursor-pointer border border-zinc-700 font-bold shrink-0"
-                  >
-                    {copiedCmd ? 'COPIED!' : 'COPY'}
-                  </button>
-                </div>
-
-                <button
-                  onClick={() => {
-                    setShowManualGuide(!showManualGuide);
-                    playTick();
-                  }}
-                  className={`text-[9px] px-3 py-1.5 rounded-sm cursor-pointer border font-bold transition-all uppercase shrink-0 ${
-                    showManualGuide 
-                      ? 'bg-emerald-950/40 text-emerald-400 border-emerald-700' 
-                      : 'bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border-zinc-700'
-                  }`}
-                >
-                  {showManualGuide ? 'ẨN CỦ HÀNH ✖' : 'CHẠY THỦ CÔNG 🛠'}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Collapsible Manual Terminal Script Block */}
-          {showManualGuide && (
-            <div className="border border-emerald-950 bg-emerald-950/20 rounded-sm p-4 space-y-4 transition-all text-[11px] leading-relaxed">
-              <div className="space-y-2">
-                <div className="text-emerald-400 font-bold uppercase tracking-wider flex items-center gap-1.5 text-xs">
-                  <span className="w-2 h-2 bg-emerald-400"></span>
-                  LƯU Ý QUAN TRỌNG VỀ KẾT NỐI LOCAL TRONG SANDBOX:
-                </div>
-                <p className="text-zinc-300">
-                  Do URL phát triển hiện tại (<code className="text-emerald-400">ais-dev-...</code>) thuộc môi trường thử nghiệm bảo mật của <b className="text-white">Google AI Studio Sandbox</b>, cơ chế Proxy sẽ tự động bắt buộc đăng nhập Google. Mọi câu lệnh <code className="text-emerald-450">curl POST</code> từ bên ngoài (như Terminal của Home Assistant) nếu không mang Token/Cookie chính chủ sẽ bị chặn lại và nhận về trang HTML đăng nhập Google.
-                </p>
-                <div className="bg-emerald-950/40 p-3 rounded-sm border border-emerald-900/60 text-zinc-300 space-y-1">
-                  <span className="text-emerald-400 font-bold">💡 Hai phương án để kích hoạt dữ liệu Local thực tế thành công:</span>
-                  <ul className="list-decimal pl-4.5 space-y-1 text-[10.5px] mt-1 text-zinc-400">
-                    <li>
-                      <b className="text-zinc-200">Cách 1 (Khuyên dùng):</b> Nhấn vào menu <b className="text-emerald-400">Share / Deploy</b> ở góc phải màn hình AI Studio để triển khai ứng dụng ra môi trường Public. URL chia sẻ công khai (`https://ais-pre-...`) sẽ không bị chặn cổng đăng nhập, giúp máy Debian Local của bạn đẩy dữ liệu lên liên tục mượt mà 100%!
-                    </li>
-                    <li>
-                      <b className="text-zinc-200">Cách 2 (Cách lấy script):</b> Nếu bạn muốn tải file script <code className="text-emerald-400">agent.sh</code> hoàn chỉnh trực tiếp, hãy click mở link <a href="/agent.sh" target="_blank" className="text-emerald-400 underline font-bold">/agent.sh</a> này trong một tab mới trên trình duyệt (nơi đã đăng nhập AI Studio) rồi sao chép mã nguồn về chạy cục bộ.
-                    </li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="relative bg-zinc-950 border border-zinc-800 rounded-sm p-3 font-mono text-[10px] text-zinc-350 overflow-x-auto max-h-68 space-y-1">
-                <div className="sticky top-0 right-0 flex justify-end">
-                  <button
-                    onClick={() => {
-                      const host = typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}` : '';
-                      const scriptStr = `cat << 'EOF' > agent.sh
-#!/bin/bash
-API_URL="${host}/api/agent-post"
-echo "=========================================================="
-echo "Initializing DeVos Debian Monitor Agent (Manual)..."
-echo "Posting metrics back live to: \\$API_URL"
-echo "Press [Ctrl + C] to terminate agent anytime."
-echo "=========================================================="
-
-for cmd in ps awk grep curl; do
-  if ! command -v \\$cmd &> /dev/null; then
-    echo "ERROR: Essential utility '\\$cmd' not found. Please install it."
-    exit 1
-  fi
-done
-
-while true; do
-  if command -v hostname &>/dev/null; then
-    HOSTNAME=\\$(hostname)
-  else
-    HOSTNAME=\$\{HOSTNAME:-debian-local\}
-  fi
-
-  if [ -f /etc/os-release ]; then
-    OS_PRETTY=\\$(grep "PRETTY_NAME" /etc/os-release | cut -d= -f2 | tr -d '"')
-  else
-    OS_PRETTY=\\$(uname -s 2>/dev/null || echo "Debian GNU/Linux")
-  fi
-
-  KERNEL=\\$(uname -r 2>/dev/null || echo "Linux")
-
-  if command -v nproc &>/dev/null; then
-    CPU_CORES=\\$(nproc)
-  else
-    CPU_CORES=\\$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
-  fi
-
-  CPU_MODEL=""
-  if [ -f /proc/cpuinfo ]; then
-    CPU_MODEL=\\$(grep -m 1 "model name" /proc/cpuinfo | cut -d: -f2 | sed -e 's/^[ \\t]*//')
-  fi
-  [ -z "\\$CPU_MODEL" ] && CPU_MODEL=\\$(uname -p 2>/dev/null || echo "ARM/Intel Processor")
-
-  CPU_LOAD_PCT=5
-  if [ -f /proc/loadavg ]; then
-    L_AVG=\\$(cat /proc/loadavg | awk '{print \\$1}')
-    CPU_LOAD_PCT=\\$(awk -v l="\\$L_AVG" -v c="\\$CPU_CORES" 'BEGIN {print int((l/c)*100)}')
-    [ "\\$CPU_LOAD_PCT" -gt 100 ] && CPU_LOAD_PCT=100
-    [ "\\$CPU_LOAD_PCT" -lt 1 ] && CPU_LOAD_PCT=1
-  else
-    CPU_LOAD_PCT=\\$(ps -A -o pcpu 2>/dev/null | awk '{s+=\\$1} END {print int(s)}')
-    [ -z "\\$CPU_LOAD_PCT" ] && CPU_LOAD_PCT=10
-  fi
-
-  MEM_TOTAL_KB=16384000; MEM_FREE_KB=8000000; MEM_BUFF_KB=0; MEM_CACH_KB=0
-  if [ -f /proc/meminfo ]; then
-    MEM_TOTAL_KB=\\$(grep MemTotal /proc/meminfo | awk '{print \\$2}')
-    MEM_FREE_KB=\\$(grep MemFree /proc/meminfo | awk '{print \\$2}')
-    MEM_BUFF_KB=\\$(grep -E 'Buffers' /proc/meminfo | awk '{print \\$2}')
-    MEM_CACH_KB=\\$(grep -E '^Cached' /proc/meminfo | awk '{print \\$2}')
-  fi
-  [ -z "\\$MEM_TOTAL_KB" ] && MEM_TOTAL_KB=16384000
-  [ -z "\\$MEM_FREE_KB" ] && MEM_FREE_KB=8000000
-  [ -z "\\$MEM_BUFF_KB" ] && MEM_BUFF_KB=0
-  [ -z "\\$MEM_CACH_KB" ] && MEM_CACH_KB=0
-
-  MEM_USED_KB=\\$((MEM_TOTAL_KB - MEM_FREE_KB - MEM_BUFF_KB - MEM_CACH_KB))
-  RAM_TOTAL=\\$(awk -v t="\\$MEM_TOTAL_KB" 'BEGIN {printf "%.1f", t/1048576}')
-  RAM_USED=\\$(awk -v u="\\$MEM_USED_KB" 'BEGIN {printf "%.2f", u/1048576}')
-
-  if command -v df &>/dev/null; then
-    DISK_PCT=\\$(df / | tail -n 1 | awk '{print \\$5}' | tr -d '%')
-    [ -z "\\$DISK_PCT" ] && DISK_PCT=35
-  else
-    DISK_PCT=42
-  fi
-
-  if [ -f /proc/uptime ]; then
-    UPTIME_SEC=\\$(cut -d. -f1 /proc/uptime)
-  else
-    UPTIME_SEC=3600
-  fi
-
-  PS_OUTPUT=\\$(ps -eo pid,pcpu,pmem,comm,user --no-headers --sort=-pcpu 2>/dev/null | head -n 10)
-  if [ -z "\\$PS_OUTPUT" ]; then
-    PS_OUTPUT=\\$(ps -eo pid,pcpu,pmem,comm,user 2>/dev/null | tail -n +2 | head -n 10)
-  fi
-  if [ -z "\\$PS_OUTPUT" ]; then
-    PS_OUTPUT=\\$(ps w 2>/dev/null | awk 'NR>1 {print \\$1, 0, 0, \\$5, \\$2}' | head -n 10)
-  fi
-  if [ -z "\\$PS_OUTPUT" ]; then
-    PS_OUTPUT=\\$(ps 2>/dev/null | awk 'NR>1 {print \\$1, 0, 0, \\$4, "root"}' | head -n 10)
-  fi
-
-  PROCESSES_JSON=\\$(echo "\\$PS_OUTPUT" | awk '
-  BEGIN { first=1 }
-  {
-    pid=\\$1; cpu=\\$2; ram=\\$3; name=\\$4; user=\\$5;
-    if (!pid || pid == "PID") next;
-    if (!cpu) cpu=0;
-    if (!ram) ram=0;
-    if (!name) name="process";
-    if (!user) user="root";
-    gsub(/"/, "\\\\\\\\\"", name);
-    gsub(/"/, "\\\\\\\\\"", user);
-    
-    if (!first) printf ",";
-    printf "{\\\\"pid\\\\":%d,\\\\"cpu\\\\":%.1f,\\\\"ram\\\\":%.1f,\\\\"name\\\\":\\\\"%s\\\\",\\\\"user\\\\":\\\\"%s\\\\",\\\\"status\\\\":\\\\"RUNNING\\\\",\\\\"nice\\\\":0,\\\\"uptimeSeconds\\\\":0}", pid, cpu, ram, name, user;
-    first=0;
-  }
-  ')
-
-  JSON_BODY="{\\"hostname\\":\\"\\$HOSTNAME\\",\\"os\\":\\"\\$OS_PRETTY\\",\\"kernel\\":\\"\\$KERNEL\\",\\"cpuCores\\":\\$CPU_CORES,\\"cpuModel\\":\\"\\$CPU_MODEL\\",\\"cpuLoad\\":\\$CPU_LOAD_PCT,\\"ramUsed\\":\\$RAM_USED,\\"ramTotal\\":\\$RAM_TOTAL,\\"diskUsed\\":\\$DISK_PCT,\\"uptime\\":\\$UPTIME_SEC,\\"processes\\":[\\$PROCESSES_JSON]}"
-
-  curl -s -X POST -H "Content-Type: application/json" -d "\\$JSON_BODY" "\\$API_URL" > /dev/null
-  echo "🟢 [\\$(date +%T)] Posted live info to DeVos (CPU: \$\{CPU_LOAD_PCT\}%, RAM: \\$RAM_USED GB)"
-  sleep 3
-done
-EOF
-chmod +x agent.sh && ./agent.sh`;
-
-                      try {
-                        navigator.clipboard.writeText(scriptStr);
-                        setCopiedManual(true);
-                        playBeep(900, 0.1, 0.05);
-                        setTimeout(() => setCopiedManual(false), 2500);
-                        logsTerminal('Đã sao chép lệnh tạo script manual vào Clipboard thành công!', 'success');
-                      } catch (err) {}
-                    }}
-                    className="px-2.5 py-1 bg-emerald-950 hover:bg-emerald-900 text-emerald-400 font-bold border border-emerald-800 rounded-sm uppercase text-[9px] cursor-pointer"
-                  >
-                    {copiedManual ? 'COPIED TO CLIPBOARD!' : 'COPY COMMAND BLOCK'}
-                  </button>
-                </div>
-                <div className="select-all opacity-85 leading-normal">
-                  <span className="text-zinc-500"># Sao chép và dán lệnh tạo agent.sh cực cục bộ này trên terminal của bạn:</span><br />
-                  <span className="text-sky-400 font-bold">cat &lt;&lt; 'EOF' &gt; agent.sh</span><br />
-                  <span className="text-zinc-300">#!/bin/bash</span><br />
-                  <span className="text-zinc-300">API_URL="{typeof window !== 'undefined' ? `${window.location.protocol}//${window.location.host}` : ''}/api/agent-post"</span><br />
-                  <span className="text-zinc-500">... (Script giám sát Debian tự động ghi nhận ổ cứng, RAM, CPU & tiến trình bằng AWK siêu vững) ...</span><br />
-                  <span className="text-sky-400 font-bold">EOF</span><br />
-                  <span className="text-emerald-400 font-bold">chmod +x agent.sh && ./agent.sh</span>
-                </div>
-              </div>
-
-              <div className="text-[10px] text-zinc-500">
-                💡 <b>Mẹo nâng cao:</b> Khi Agent chạy thành công, nó gửi tín hiệu ping đều đặn mỗi 3 giây. Quay lại góc trên chọn tab <b>"MÁY DEBIAN LOCAL"</b> để kích hoạt xem trực quan dữ liệu thực!
-              </div>
-            </div>
-          )}
-        </section>
+        {/* Café Lo-fi Studio Accent Player */}
+        <LofiPlayer />
 
         {/* Bento Board Layout */}
         <div id="dashboard-grid" className="grid grid-cols-1 lg:grid-cols-12 gap-4">
