@@ -7,6 +7,7 @@ import SystemSensorsComp from './components/SystemSensors';
 import AgyPanel from './components/AgyPanel';
 import TerminalCLI from './components/TerminalCLI';
 import LofiPlayer from './components/LofiPlayer';
+import AiDiagnostics from './components/AiDiagnostics';
 import { playBootSweep, setSoundEnabled, playBeep, playSuccessChime, playTick, playErrorBuzz } from './utils/audio';
 import { Shield, Sparkles, Terminal as TerminalIcon, Calendar, CheckCircle2, Flame, RefreshCw } from 'lucide-react';
 
@@ -423,6 +424,14 @@ export default function App() {
                 </div>
               </div>
             </div>
+
+            {/* The DevOps AI Assistant System diagnostics */}
+            <AiDiagnostics 
+              sensors={sensors}
+              processes={processes}
+              tasks={tasks}
+              logsTerminal={logsTerminal}
+            />
           </div>
 
           {/* Right Column (45% space) - PC Monitoring, HTOP and Sensors modules */}

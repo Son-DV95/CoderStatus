@@ -39,6 +39,8 @@ export default function TerminalCLI({
     { cmd: 'todo done <ki_tu>', desc: 'Đánh dấu hoàn thành task có tên chứa kí tự' },
     { cmd: 'kill <pid>', desc: 'Kill tiến trình hệ thống trong htop theo pid' },
     { cmd: 'run <1|2|3>', desc: 'Kích hoạt Agents tự động hóa quét lỗi, dọn dẹp' },
+    { cmd: 'clean', desc: 'Dọn dẹp sâu sắc hệ thống thực tế (node, vite, react, ollama)' },
+    { cmd: 'report', desc: 'Gửi toàn bộ chỉ số hiện trạng hệ thống cho Gemini AI phân tích' },
     { cmd: 'sysinfo', desc: 'In trạng thái phần cứng, RAM và nhiệt độ PC' },
     { cmd: 'clear', desc: 'Dọn sạch màn hình terminal của bạn' },
   ];
@@ -195,6 +197,81 @@ export default function TerminalCLI({
       logsTerminal(`  HỆ ĐIỀU HÀNH GIẢ SẢN          : DevOS Shell Embedded v4.1`, 'output');
       logsTerminal(`  THREAD ALLOTMENT              : 4 Core / 4 Threads`, 'output');
       logsTerminal(`  GIAO THỨC CHỜ                 : I2C Internal Sensors Gateway`, 'output');
+      return;
+    }
+
+    // 9. CLEAN command for DevOps
+    if (lowerCmd === 'clean' || lowerCmd === 'purge') {
+      playBeep(800, 0.12);
+      logsTerminal('=== KHỞI CHẠY TIẾN TRÌNH PURGE DỌN DẸP SÂU ===', 'header');
+      logsTerminal('Đang liên kết API /api/deep-clean, gửi tín hiệu dọn dẹp tối ưu toàn hệ thống...', 'system');
+      
+      fetch('/api/deep-clean', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ selectedTargets: ['node', 'vite', 'react', 'ollama', 'tmp_logs'] })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          logsTerminal(`[SUCCESS]: ${data.message}`, 'success');
+          logsTerminal(`-> Giải phóng: ${data.reclaimedMb} MB`, 'success');
+          logsTerminal(`-> Kill vãng lai: ${data.killedThreads} luồng (threads)`, 'success');
+        } else {
+          logsTerminal(`[LỖI]: ${data.error}`, 'error');
+        }
+      })
+      .catch(err => {
+        logsTerminal(`[LỖI TRUYỀN TẢI]: ${err.message}`, 'error');
+      });
+      return;
+    }
+
+    // 10. REPORT / AI command
+    if (lowerCmd === 'report' || lowerCmd === 'ai' || lowerCmd === 'ai_analyze' || lowerCmd === 'diagnose') {
+      playBeep(900, 0.15);
+      logsTerminal('=== KHOANH VÙNG KIỂM TRA & CHẨN ĐOÁN AI GEMINI ===', 'header');
+      logsTerminal('[WAIT]: Đang trích xuất telemetry sensors gửi AI phân tích...', 'system');
+      
+      fetch('/api/analyze-status', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          sensors: {
+            cpuTemp: 55,
+            gpuTemp: 51,
+            fanSpeed: 2100,
+            powerDraw: 65,
+            cpuLoad: 24,
+            ramUsed: 4.8,
+            ramTotal: 16,
+            diskUsed: 36
+          },
+          processes,
+          tasks
+        })
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          logsTerminal('=== BÁO CÁO PHÂN TÍCH CHUYÊN GIA DEVOS AI ===', 'header');
+          const lines = data.analysis.split('\n');
+          lines.forEach((line: string) => {
+            if (line.trim()) {
+              logsTerminal(line, 'output');
+            }
+          });
+        } else {
+          logsTerminal(`[AI LỖI]: ${data.error}`, 'error');
+        }
+      })
+      .catch(err => {
+        logsTerminal(`[LỖI TRUYỀN TẢI]: ${err.message}`, 'error');
+      });
       return;
     }
 

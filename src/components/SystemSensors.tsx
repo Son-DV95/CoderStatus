@@ -16,11 +16,34 @@ export default function SystemSensorsComp({
 }: SystemSensorsCompProps) {
   const [loadMultiplier, setLoadMultiplier] = useState<number>(1.5); // 1.0 to 5.0
   const [alertTriggered, setAlertTriggered] = useState(false);
+  
+  // Persistent thermal calibration offset (default to +15°C baseline to represent normal host temperature 55°C scale)
+  const [tempOffset, setTempOffset] = useState<number>(() => {
+    const saved = localStorage.getItem('devos_temp_offset');
+    return saved ? parseInt(saved, 10) : 15;
+  });
+
+  const calCpuTemp = Math.min(99, Math.max(20, sensors.cpuTemp + tempOffset));
+  const calGpuTemp = Math.min(95, Math.max(18, sensors.gpuTemp + tempOffset));
+
+  const handleOffsetChange = (val: number) => {
+    setTempOffset(val);
+    localStorage.setItem('devos_temp_offset', val.toString());
+    playTick();
+  };
 
   // Dynamic fluctuation & workload calculation
   useEffect(() => {
     if (dataSource === 'SERVER' || dataSource === 'LOCAL') {
-      // In full-stack mode, stats are driven directly by real host metrics from server
+      // High temperature audit in server mode
+      if (calCpuTemp >= 75) {
+        if (!alertTriggered) {
+          setAlertTriggered(true);
+          playErrorBuzz();
+        }
+      } else {
+        setAlertTriggered(false);
+      }
       return;
     }
     const interval = setInterval(() => {
@@ -79,7 +102,7 @@ export default function SystemSensorsComp({
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [loadMultiplier, sensors.cpuLoad, onUpdateSensors, alertTriggered]);
+  }, [loadMultiplier, sensors.cpuLoad, onUpdateSensors, alertTriggered, calCpuTemp]);
 
   const getTempColor = (temp: number) => {
     if (temp >= 75) return 'text-red-500 font-bold';
@@ -104,7 +127,7 @@ export default function SystemSensorsComp({
           <div className="flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
             <div>
-              <span className="font-bold">⚠️ CRITICAL THERMAL EVENT:</span> CPU temperatures breached {sensors.cpuTemp}°C. Cooling daemon has set cooler fans to MAXIMUM overdrive output.
+              <span className="font-bold">⚠️ CRITICAL THERMAL EVENT:</span> CPU temperatures breached {calCpuTemp}°C. Cooling daemon has set cooler fans to MAXIMUM overdrive output.
             </div>
           </div>
         </div>
@@ -120,15 +143,15 @@ export default function SystemSensorsComp({
             <Thermometer className="w-3.5 h-3.5 text-zinc-400" />
           </div>
           <div>
-            <div className={`text-xl font-bold tracking-tight ${getTempColor(sensors.cpuTemp)}`}>
-              {sensors.cpuTemp}°C
+            <div className={`text-xl font-bold tracking-tight ${getTempColor(calCpuTemp)}`}>
+              {calCpuTemp}°C
             </div>
             <div className="text-[9px] text-zinc-650 font-medium">THRESHOLD: 85°C</div>
           </div>
           <div className="w-full bg-zinc-900 h-1 mt-2 overflow-hidden">
             <div 
-              className={`h-full transition-all duration-700 ${sensors.cpuTemp > 75 ? 'bg-red-500' : sensors.cpuTemp > 55 ? 'bg-amber-500' : 'bg-emerald-500'}`} 
-              style={{ width: `${Math.min(100, (sensors.cpuTemp / 90) * 100)}%` }} 
+              className={`h-full transition-all duration-700 ${calCpuTemp > 75 ? 'bg-red-500' : calCpuTemp > 55 ? 'bg-amber-500' : 'bg-emerald-500'}`} 
+              style={{ width: `${Math.min(100, (calCpuTemp / 90) * 100)}%` }} 
             />
           </div>
         </div>
@@ -140,15 +163,15 @@ export default function SystemSensorsComp({
             <Thermometer className="w-3.5 h-3.5 text-zinc-400" />
           </div>
           <div>
-            <div className={`text-xl font-bold tracking-tight ${getTempColor(sensors.gpuTemp)}`}>
-              {sensors.gpuTemp}°C
+            <div className={`text-xl font-bold tracking-tight ${getTempColor(calGpuTemp)}`}>
+              {calGpuTemp}°C
             </div>
             <div className="text-[9px] text-zinc-650 font-medium">DIE_TEMP INTEL_ARC</div>
           </div>
           <div className="w-full bg-zinc-900 h-1 mt-2 overflow-hidden">
             <div 
-              className={`h-full transition-all duration-700 ${sensors.gpuTemp > 75 ? 'bg-red-500' : sensors.gpuTemp > 55 ? 'bg-amber-500' : 'bg-emerald-500'}`} 
-              style={{ width: `${Math.min(100, (sensors.gpuTemp / 90) * 100)}%` }} 
+              className={`h-full transition-all duration-700 ${calGpuTemp > 75 ? 'bg-red-500' : calGpuTemp > 55 ? 'bg-amber-500' : 'bg-emerald-500'}`} 
+              style={{ width: `${Math.min(100, (calGpuTemp / 90) * 100)}%` }} 
             />
           </div>
         </div>
@@ -206,30 +229,61 @@ export default function SystemSensorsComp({
         </div>
       </div>
 
-      {/* Sliders for Simulated PC workload Strain */}
-      <div className="bg-zinc-950 p-3 rounded-sm border border-zinc-800 text-[11px] select-none text-zinc-350">
-        <div className="flex items-center justify-between mb-1">
-          <span className="font-bold flex items-center gap-1.5 text-[10px] text-zinc-400 uppercase tracking-widest"><Info className="w-3.5 h-3.5 text-zinc-400" /> SIMULATED HOST STRESS:</span>
-          <span className="text-emerald-400 font-bold bg-emerald-950/20 px-1.5 py-0.5 rounded-sm border border-emerald-900/40">{loadMultiplier.toFixed(1)}x</span>
+      <div className="space-y-2 mt-auto">
+        {/* Sliders for Simulated PC workload Strain */}
+        <div className="bg-zinc-950 p-3 rounded-sm border border-zinc-800 text-[11px] select-none text-zinc-350">
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-bold flex items-center gap-1.5 text-[10px] text-zinc-400 uppercase tracking-widest"><Info className="w-3.5 h-3.5 text-zinc-400" /> SIMULATED HOST STRESS:</span>
+            <span className="text-emerald-400 font-bold bg-emerald-950/20 px-1.5 py-0.5 rounded-sm border border-emerald-900/40">{loadMultiplier.toFixed(1)}x</span>
+          </div>
+          <input
+            id="host-stress-slider"
+            type="range"
+            min="1.0"
+            max="5.0"
+            step="0.5"
+            value={loadMultiplier}
+            onChange={(e) => {
+              const nextVal = parseFloat(e.target.value);
+              setLoadMultiplier(nextVal);
+              playTick();
+            }}
+            className="w-full bg-zinc-900 accent-emerald-500 cursor-pointer h-1.5 rounded-none mt-1"
+          />
+          <div className="text-[8.5px] text-zinc-500 flex justify-between mt-1.5 font-mono">
+            <span>1.0x (IDLE STAT)</span>
+            <span>3.0x (COMPILE MODES)</span>
+            <span>5.0x (STRESS TESTING)</span>
+          </div>
         </div>
-        <input
-          id="host-stress-slider"
-          type="range"
-          min="1.0"
-          max="5.0"
-          step="0.5"
-          value={loadMultiplier}
-          onChange={(e) => {
-            const nextVal = parseFloat(e.target.value);
-            setLoadMultiplier(nextVal);
-            playTick();
-          }}
-          className="w-full bg-zinc-900 accent-emerald-500 cursor-pointer h-1.5 rounded-none mt-1"
-        />
-        <div className="text-[8.5px] text-zinc-500 flex justify-between mt-1.5 font-mono">
-          <span>1.0x (IDLE STAT)</span>
-          <span>3.0x (COMPILE MODES)</span>
-          <span>5.0x (STRESS TESTING)</span>
+
+        {/* Persistent Calibration Offset Slider */}
+        <div className="bg-zinc-950 p-3 rounded-sm border border-zinc-800 text-[11px] select-none text-zinc-350">
+          <div className="flex items-center justify-between mb-1">
+            <span className="font-bold flex items-center gap-1.5 text-[10px] text-zinc-400 uppercase tracking-widest">
+              <Thermometer className="w-3.5 h-3.5 text-zinc-400" /> CHỈNH NHIỆT ĐỘ THỰC TẾ:
+            </span>
+            <span className="text-amber-400 font-bold bg-amber-950/20 px-1.5 py-0.5 rounded-sm border border-amber-900/40">
+              {tempOffset >= 0 ? `+${tempOffset}` : tempOffset}°C
+            </span>
+          </div>
+          <input
+            id="temp-calibration-slider"
+            type="range"
+            min="-20"
+            max="40"
+            step="1"
+            value={tempOffset}
+            onChange={(e) => {
+              handleOffsetChange(parseInt(e.target.value, 10));
+            }}
+            className="w-full bg-zinc-900 accent-amber-500 cursor-pointer h-1.5 rounded-none mt-1"
+          />
+          <div className="text-[8.5px] text-zinc-500/80 flex justify-between mt-1.5 font-mono">
+            <span>-20°C (GIẢM LẠNH)</span>
+            <span>0°C (MẶC ĐỊNH HOST)</span>
+            <span>+40°C (TỐI ĐA BÙ)</span>
+          </div>
         </div>
       </div>
     </div>

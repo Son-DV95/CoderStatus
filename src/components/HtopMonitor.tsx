@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { SystemProcess, SystemSensors } from '../types';
-import { Play, Square, RefreshCw, X, ChevronDown, ChevronUp, Plus } from 'lucide-react';
-import { playTick, playBeep, playErrorBuzz } from '../utils/audio';
+import { Play, Square, RefreshCw, X, ChevronDown, ChevronUp, Plus, Trash2, ShieldAlert, Sparkles, Database, FileText, CheckSquare, Settings } from 'lucide-react';
+import { playTick, playBeep, playErrorBuzz, playSuccessChime } from '../utils/audio';
 
 interface HtopMonitorProps {
   sensors: SystemSensors;
@@ -23,6 +23,14 @@ export default function HtopMonitor({
   const [sortBy, setSortBy] = useState<'pid' | 'cpu' | 'ram' | 'name'>('cpu');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [spawnName, setSpawnName] = useState('vite-indexer');
+  
+  // Custom user requested features
+  const [showAllProcesses, setShowAllProcesses] = useState(false);
+  const [showCleanPanel, setShowCleanPanel] = useState(false);
+  const [isCleaning, setIsCleaning] = useState(false);
+  const [cleanTargets, setCleanTargets] = useState<string[]>(['node', 'vite', 'react', 'ollama', 'tmp_logs']);
+  const [cleanLogs, setCleanLogs] = useState<string[]>([]);
+  const [cleanReport, setCleanReport] = useState<{ reclaimedMb: number; killedThreads: number; details: any } | null>(null);
 
   // Spawn preset process names
   const systemScripts = [
@@ -155,6 +163,69 @@ export default function HtopMonitor({
     return sortOrder === 'desc' ? <ChevronDown className="w-3 h-3 text-emerald-400" /> : <ChevronUp className="w-3 h-3 text-emerald-400" />;
   };
 
+  // Custom Deep Clean handler
+  const handleDeepPurge = async () => {
+    if (isCleaning) return;
+    setIsCleaning(true);
+    setCleanReport(null);
+    setCleanLogs([]);
+    playBeep(800, 0.15);
+    
+    const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+    
+    setCleanLogs(prev => [...prev, '[DỌN DẸP] Đang khởi động Purge Optimizer v4.9...']);
+    await sleep(400);
+    setCleanLogs(prev => [...prev, `[DỌN DẸP] Mục tiêu quét : [${cleanTargets.join(', ')}]`]);
+    await sleep(400);
+
+    if (cleanTargets.includes('node')) {
+      setCleanLogs(prev => [...prev, '[QUÉT] Quét bộ nhớ rác Heap Leaks của tiến trình Node.js...']);
+      await sleep(350);
+    }
+    if (cleanTargets.includes('vite')) {
+      setCleanLogs(prev => [...prev, '[QUÉT] Flush bộ nhớ bundler cache Vite HMR...']);
+      await sleep(300);
+    }
+    if (cleanTargets.includes('ollama')) {
+      setCleanLogs(prev => [...prev, '[QUÉT] Pruning inactive Ollama model contexts...']);
+      await sleep(400);
+    }
+
+    try {
+      const res = await fetch('/api/deep-clean', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ selectedTargets: cleanTargets })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setCleanReport({
+          reclaimedMb: data.reclaimedMb,
+          killedThreads: data.killedThreads,
+          details: data.details
+        });
+        setCleanLogs(prev => [
+          ...prev, 
+          `[OK] Đã hoàn tất tối ưu hóa thành công!`,
+          `[THÔNG SỐ] Giải phóng : ${data.reclaimedMb} MB`,
+          `[THÔNG SỐ] Đã giải tán  : ${data.killedThreads} tiến trình ngầm vãng lai.`
+        ]);
+        playSuccessChime();
+        logsTerminal(`[DEEP PURGE SUCCESS]: ${data.message}`, 'success');
+      } else {
+        throw new Error(data.error || 'Deep clean endpoint returned server error');
+      }
+    } catch (err: any) {
+      setCleanLogs(prev => [...prev, `[LỖI] Trục trặc: ${err.message}`]);
+      playErrorBuzz();
+      logsTerminal(`[DEEP PURGE ERR]: ${err.message}`, 'error');
+    } finally {
+      setIsCleaning(false);
+    }
+  };
+
   const sortedProcesses = [...processes].sort((a, b) => {
     let valA = a[sortBy];
     let valB = b[sortBy];
@@ -167,6 +238,8 @@ export default function HtopMonitor({
       ? (valA as number) - (valB as number)
       : (valB as number) - (valA as number);
   });
+
+  const visibleProcesses = showAllProcesses ? sortedProcesses : sortedProcesses.slice(0, 7);
 
   // Calculate some stats
   const coreBars = [
@@ -236,6 +309,133 @@ export default function HtopMonitor({
         </div>
       </div>
 
+      {/* Deep Purge trigger bar */}
+      <div className="bg-zinc-950 p-2 border border-zinc-800 rounded-sm mb-3 flex items-center justify-between text-[11px]">
+        <div className="flex items-center gap-2">
+          <Trash2 className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+          <span className="font-bold text-zinc-300">TRÌNH DỌN DẸP SÂU HỆ THỐNG</span>
+        </div>
+        <button
+          id="btn-toggle-deep-clean"
+          onClick={() => {
+            setShowCleanPanel(!showCleanPanel);
+            playTick();
+          }}
+          className={`px-2 py-0.5 rounded-sm font-bold text-[9.5px] border cursor-pointer transition-all ${
+            showCleanPanel 
+              ? 'bg-amber-500/20 border-amber-500 text-amber-300 animate-pulse' 
+              : 'bg-zinc-900 border-zinc-700 hover:bg-zinc-800 text-zinc-300'
+          }`}
+        >
+          {showCleanPanel ? 'ĐÓNG ĐIỀU KHIỂN' : 'MỞ ĐIỀU KHIỂN SÂU (DEEP PURGE)'}
+        </button>
+      </div>
+
+      {/* Interactive Deep Purge Panel */}
+      {showCleanPanel && (
+        <div className="bg-zinc-950 border border-amber-500/20 p-2.5 rounded-sm mb-3 text-[11px] animate-fadeIn">
+          <div className="flex items-center justify-between border-b border-zinc-900 pb-1.5 mb-2">
+            <span className="font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wide">
+              <ShieldAlert className="w-3.5 h-3.5 text-amber-500" /> Bảng điều khiển Purge Engine tối ưu
+            </span>
+            <span className="text-[9px] text-zinc-500 font-mono">EMULATOR: SANBOX_MODE</span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 mb-2">
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={cleanTargets.includes('node')}
+                onChange={() => {
+                  playTick();
+                  setCleanTargets(prev => prev.includes('node') ? prev.filter(t => t !== 'node') : [...prev, 'node']);
+                }}
+                className="accent-amber-500 cursor-pointer"
+              />
+              <span className="text-zinc-400 text-[10px]">Node.js Engine (Heap GC)</span>
+            </label>
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={cleanTargets.includes('vite')}
+                onChange={() => {
+                  playTick();
+                  setCleanTargets(prev => prev.includes('vite') ? prev.filter(t => t !== 'vite') : [...prev, 'vite']);
+                }}
+                className="accent-amber-500 cursor-pointer"
+              />
+              <span className="text-zinc-400 text-[10px]">Vite Bundler (Dev HMR Cache)</span>
+            </label>
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={cleanTargets.includes('react')}
+                onChange={() => {
+                  playTick();
+                  setCleanTargets(prev => prev.includes('react') ? prev.filter(t => t !== 'react') : [...prev, 'react']);
+                }}
+                className="accent-amber-500 cursor-pointer"
+              />
+              <span className="text-zinc-400 text-[10px]">React Developer Sandbox</span>
+            </label>
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={cleanTargets.includes('ollama')}
+                onChange={() => {
+                  playTick();
+                  setCleanTargets(prev => prev.includes('ollama') ? prev.filter(t => t !== 'ollama') : [...prev, 'ollama']);
+                }}
+                className="accent-amber-500 cursor-pointer"
+              />
+              <span className="text-zinc-400 text-[10px]">Ollama Background Contexts</span>
+            </label>
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer col-span-2 select-none">
+              <input 
+                type="checkbox" 
+                checked={cleanTargets.includes('tmp_logs')}
+                onChange={() => {
+                  playTick();
+                  setCleanTargets(prev => prev.includes('tmp_logs') ? prev.filter(t => t !== 'tmp_logs') : [...prev, 'tmp_logs']);
+                }}
+                className="accent-amber-500 cursor-pointer"
+              />
+              <span className="text-zinc-400 text-[10px]">Nhật ký rác tạm hệ thống (/tmp/*.log)</span>
+            </label>
+          </div>
+
+          <div className="flex gap-2 items-stretch min-h-[72px]">
+            {/* Terminal log output stream */}
+            <div className="flex-grow bg-zinc-950 rounded-sm border border-zinc-900 p-1.5 font-mono text-[9px] text-zinc-400 max-h-[85px] overflow-y-auto leading-tight space-y-0.5">
+              {cleanLogs.length === 0 ? (
+                <div className="text-zinc-650 italic text-center pt-5">[Sẵn sàng kích hoạt dọn dẹp hệ thống]</div>
+              ) : (
+                cleanLogs.map((log, lIdx) => (
+                  <div key={lIdx} className={log.includes('[OK]') ? 'text-emerald-400 font-bold' : log.includes('[LỖI]') ? 'text-red-400 font-bold' : 'text-zinc-400'}>
+                    {log}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="shrink-0 flex flex-col justify-between w-28">
+              <button
+                id="btn-trigger-deep-purge"
+                disabled={isCleaning || cleanTargets.length === 0}
+                onClick={handleDeepPurge}
+                className="w-full bg-amber-500 text-black hover:bg-amber-400 disabled:bg-zinc-800 disabled:text-zinc-500 font-bold text-[9px] p-2 rounded-sm cursor-pointer transition-colors block text-center uppercase tracking-wide h-10"
+              >
+                {isCleaning ? 'PURGING...' : 'BẮT ĐẦU PURGE'}
+              </button>
+
+              <div className="p-1 rounded-sm text-center text-[8.5px] text-zinc-500 leading-tight">
+                Không ảnh hưởng mã nguồn.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Spawning Controls */}
       <form onSubmit={handleSpawn} className="flex gap-2 mb-3 bg-zinc-950 p-2 rounded-sm border border-zinc-800 items-center">
         <span className="text-[9px] text-zinc-500 font-semibold uppercase tracking-wider shrink-0 flex items-center gap-1">
@@ -297,7 +497,7 @@ export default function HtopMonitor({
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-900 w-full">
-            {sortedProcesses.map((proc) => (
+            {visibleProcesses.map((proc) => (
               <tr 
                 key={proc.pid} 
                 className={`hover:bg-zinc-800/40 font-mono text-zinc-300 ${
@@ -339,7 +539,24 @@ export default function HtopMonitor({
       </div>
 
       <div className="mt-2 text-[9px] text-zinc-500 flex justify-between items-center select-none pt-2 border-t border-zinc-800">
-        <span>Click <b>NICE</b> để chỉnh độ ưu tiên | <b>KILL</b> giải phóng RAM</span>
+        <button
+          id="btn-expand-processes"
+          onClick={() => {
+            setShowAllProcesses(!showAllProcesses);
+            playTick();
+          }}
+          className="bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 hover:text-white text-zinc-300 px-2 py-0.5 rounded-sm flex items-center gap-1 font-mono cursor-pointer transition-all text-[9.5px]"
+        >
+          {showAllProcesses ? (
+            <>
+              THU GỌN DANH SÁCH (SHOW LESS) <ChevronUp className="w-3.5 h-3.5 text-emerald-400" />
+            </>
+          ) : (
+            <>
+              XEM TOÀN BỘ TIẾN TRÌNH ({processes.length}) (SHOW ALL) <ChevronDown className="w-3.5 h-3.5 text-emerald-400" />
+            </>
+          )}
+        </button>
         <span className="text-zinc-500">SORT: {sortBy.toUpperCase()} ({sortOrder.toUpperCase()})</span>
       </div>
     </div>
