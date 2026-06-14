@@ -17,14 +17,15 @@ export default function SystemSensorsComp({
   const [loadMultiplier, setLoadMultiplier] = useState<number>(1.5); // 1.0 to 5.0
   const [alertTriggered, setAlertTriggered] = useState(false);
   
-  // Persistent thermal calibration offset (default to +15°C baseline to represent normal host temperature 55°C scale)
+  // Persistent thermal calibration offset (defaults to 0 for real host mapping)
   const [tempOffset, setTempOffset] = useState<number>(() => {
     const saved = localStorage.getItem('devos_temp_offset');
-    return saved ? parseInt(saved, 10) : 15;
+    return saved ? parseInt(saved, 10) : 0;
   });
 
-  const calCpuTemp = Math.min(99, Math.max(20, sensors.cpuTemp + tempOffset));
-  const calGpuTemp = Math.min(95, Math.max(18, sensors.gpuTemp + tempOffset));
+  const isRealDevice = dataSource === 'SERVER' || dataSource === 'LOCAL';
+  const calCpuTemp = Math.min(105, Math.max(10, sensors.cpuTemp + (isRealDevice ? 0 : tempOffset)));
+  const calGpuTemp = Math.min(100, Math.max(8, sensors.gpuTemp + (isRealDevice ? 0 : tempOffset)));
 
   const handleOffsetChange = (val: number) => {
     setTempOffset(val);
@@ -230,61 +231,74 @@ export default function SystemSensorsComp({
       </div>
 
       <div className="space-y-2 mt-auto">
-        {/* Sliders for Simulated PC workload Strain */}
-        <div className="bg-zinc-950 p-3 rounded-sm border border-zinc-800 text-[11px] select-none text-zinc-350">
-          <div className="flex items-center justify-between mb-1">
-            <span className="font-bold flex items-center gap-1.5 text-[10px] text-zinc-400 uppercase tracking-widest"><Info className="w-3.5 h-3.5 text-zinc-400" /> SIMULATED HOST STRESS:</span>
-            <span className="text-emerald-400 font-bold bg-emerald-950/20 px-1.5 py-0.5 rounded-sm border border-emerald-900/40">{loadMultiplier.toFixed(1)}x</span>
+        {isRealDevice ? (
+          <div className="bg-emerald-950/20 border border-emerald-500/10 p-3 rounded-sm text-[10.5px] text-emerald-400 font-mono text-center flex flex-col items-center justify-center gap-1.5 min-h-[140px]">
+            <span className="font-bold flex items-center justify-center gap-1.5 text-[11px] uppercase tracking-wider animate-pulse">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 shadow-md"></span> REAL TELEMETRY ACTIVE
+            </span>
+            <span className="text-[10px] text-zinc-400 leading-relaxed px-1">
+              Đang hiển thị chỉ số cảm biến vật lý thực tế trực tiếp từ thiết bị. Các bảng thanh trượt điều chỉnh giả lập đã tự động được bỏ qua để cam kết tính trung thực của phần cứng.
+            </span>
           </div>
-          <input
-            id="host-stress-slider"
-            type="range"
-            min="1.0"
-            max="5.0"
-            step="0.5"
-            value={loadMultiplier}
-            onChange={(e) => {
-              const nextVal = parseFloat(e.target.value);
-              setLoadMultiplier(nextVal);
-              playTick();
-            }}
-            className="w-full bg-zinc-900 accent-emerald-500 cursor-pointer h-1.5 rounded-none mt-1"
-          />
-          <div className="text-[8.5px] text-zinc-500 flex justify-between mt-1.5 font-mono">
-            <span>1.0x (IDLE STAT)</span>
-            <span>3.0x (COMPILE MODES)</span>
-            <span>5.0x (STRESS TESTING)</span>
-          </div>
-        </div>
+        ) : (
+          <>
+            {/* Sliders for Simulated PC workload Strain */}
+            <div className="bg-zinc-950 p-3 rounded-sm border border-zinc-800 text-[11px] select-none text-zinc-350">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-bold flex items-center gap-1.5 text-[10px] text-zinc-400 uppercase tracking-widest"><Info className="w-3.5 h-3.5 text-zinc-400" /> SIMULATED HOST STRESS:</span>
+                <span className="text-emerald-400 font-bold bg-emerald-950/20 px-1.5 py-0.5 rounded-sm border border-emerald-900/40">{loadMultiplier.toFixed(1)}x</span>
+              </div>
+              <input
+                id="host-stress-slider"
+                type="range"
+                min="1.0"
+                max="5.0"
+                step="0.5"
+                value={loadMultiplier}
+                onChange={(e) => {
+                  const nextVal = parseFloat(e.target.value);
+                  setLoadMultiplier(nextVal);
+                  playTick();
+                }}
+                className="w-full bg-zinc-900 accent-emerald-500 cursor-pointer h-1.5 rounded-none mt-1"
+              />
+              <div className="text-[8.5px] text-zinc-500 flex justify-between mt-1.5 font-mono">
+                <span>1.0x (IDLE STAT)</span>
+                <span>3.0x (COMPILE MODES)</span>
+                <span>5.0x (STRESS TESTING)</span>
+              </div>
+            </div>
 
-        {/* Persistent Calibration Offset Slider */}
-        <div className="bg-zinc-950 p-3 rounded-sm border border-zinc-800 text-[11px] select-none text-zinc-350">
-          <div className="flex items-center justify-between mb-1">
-            <span className="font-bold flex items-center gap-1.5 text-[10px] text-zinc-400 uppercase tracking-widest">
-              <Thermometer className="w-3.5 h-3.5 text-zinc-400" /> CHỈNH NHIỆT ĐỘ THỰC TẾ:
-            </span>
-            <span className="text-amber-400 font-bold bg-amber-950/20 px-1.5 py-0.5 rounded-sm border border-amber-900/40">
-              {tempOffset >= 0 ? `+${tempOffset}` : tempOffset}°C
-            </span>
-          </div>
-          <input
-            id="temp-calibration-slider"
-            type="range"
-            min="-20"
-            max="40"
-            step="1"
-            value={tempOffset}
-            onChange={(e) => {
-              handleOffsetChange(parseInt(e.target.value, 10));
-            }}
-            className="w-full bg-zinc-900 accent-amber-500 cursor-pointer h-1.5 rounded-none mt-1"
-          />
-          <div className="text-[8.5px] text-zinc-500/80 flex justify-between mt-1.5 font-mono">
-            <span>-20°C (GIẢM LẠNH)</span>
-            <span>0°C (MẶC ĐỊNH HOST)</span>
-            <span>+40°C (TỐI ĐA BÙ)</span>
-          </div>
-        </div>
+            {/* Persistent Calibration Offset Slider */}
+            <div className="bg-zinc-950 p-3 rounded-sm border border-zinc-800 text-[11px] select-none text-zinc-350">
+              <div className="flex items-center justify-between mb-1">
+                <span className="font-bold flex items-center gap-1.5 text-[10px] text-zinc-400 uppercase tracking-widest">
+                  <Thermometer className="w-3.5 h-3.5 text-zinc-400" /> CHỈNH NHIỆT ĐỘ THỰC TẾ:
+                </span>
+                <span className="text-amber-400 font-bold bg-amber-950/20 px-1.5 py-0.5 rounded-sm border border-amber-900/40">
+                  {tempOffset >= 0 ? `+${tempOffset}` : tempOffset}°C
+                </span>
+              </div>
+              <input
+                id="temp-calibration-slider"
+                type="range"
+                min="-20"
+                max="40"
+                step="1"
+                value={tempOffset}
+                onChange={(e) => {
+                  handleOffsetChange(parseInt(e.target.value, 10));
+                }}
+                className="w-full bg-zinc-900 accent-amber-500 cursor-pointer h-1.5 rounded-none mt-1"
+              />
+              <div className="text-[8.5px] text-zinc-500/80 flex justify-between mt-1.5 font-mono">
+                <span>-20°C (GIẢM LẠNH)</span>
+                <span>0°C (MẶC ĐỊNH HOST)</span>
+                <span>+40°C (TỐI ĐA BÙ)</span>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

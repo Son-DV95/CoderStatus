@@ -303,8 +303,8 @@ export default function HtopMonitor({
           </div>
 
           <div className="text-[10px] text-zinc-500 flex justify-between pt-1 border-t border-zinc-900 mt-2">
-            <span>SWAP: <span className="text-emerald-450 font-bold">0.2G / 4.0G</span></span>
-            <span>IP: <span className="text-emerald-450 font-bold">192.168.1.144</span></span>
+            <span>SWAP: <span className="text-emerald-450 font-bold">{(sensors.swapUsed ?? 0.2).toFixed(1)}G / {(sensors.swapTotal ?? 4.0).toFixed(1)}G</span></span>
+            <span>IP: <span className="text-emerald-450 font-bold">{sensors.ipAddress ?? "127.0.0.1"}</span></span>
           </div>
         </div>
       </div>
@@ -338,7 +338,9 @@ export default function HtopMonitor({
             <span className="font-bold text-amber-400 flex items-center gap-1.5 uppercase tracking-wide">
               <ShieldAlert className="w-3.5 h-3.5 text-amber-500" /> Bảng điều khiển Purge Engine tối ưu
             </span>
-            <span className="text-[9px] text-zinc-500 font-mono">EMULATOR: SANBOX_MODE</span>
+            <span className="text-[9px] text-zinc-500 font-mono">
+              NGUỒN LỰC: {dataSource === 'LOCAL' ? 'THIẾT BỊ VẬT LÝ (AGENT)' : dataSource === 'SERVER' ? 'HOST CONTAINER (SERVER)' : 'GIẢ LẬP (SANDBOX)'}
+            </span>
           </div>
 
           <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 mb-2">
@@ -464,7 +466,9 @@ export default function HtopMonitor({
       </form>
 
       {/* HTOP Active Processes Table List */}
-      <div className="flex-grow overflow-x-auto select-none border border-zinc-800 rounded-sm bg-zinc-950">
+      <div className={`overflow-x-auto overflow-y-auto select-none border border-zinc-800 rounded-sm bg-zinc-950 transition-all duration-300 ${
+        showAllProcesses ? 'max-h-[450px]' : 'max-h-[220px]'
+      }`}>
         <table className="w-full text-left text-[11px] border-collapse min-w-[420px]">
           <thead>
             <tr className="bg-zinc-900 text-zinc-400 font-bold border-b border-zinc-800">

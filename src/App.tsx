@@ -63,7 +63,10 @@ const defaultSensors: SystemSensors = {
   ramUsed: 4.2,
   ramTotal: 16,
   diskUsed: 48,
-  networkKbps: { up: 45, down: 280 }
+  networkKbps: { up: 45, down: 280 },
+  swapTotal: 4.0,
+  swapUsed: 0.2,
+  ipAddress: "127.0.0.1",
 };
 
 const defaultAgents: AgyAgent[] = [

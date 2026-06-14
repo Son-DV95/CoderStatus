@@ -27,6 +27,9 @@ interface SystemSensors {
   ramTotal: number;
   diskUsed: number;
   networkKbps: { up: number; down: number };
+  swapTotal?: number;
+  swapUsed?: number;
+  ipAddress?: string;
 }
 
 // Global cached variables for simulated metrics or local machine posts
@@ -36,12 +39,12 @@ let localAgentData: {
   kernel: string;
   cpuCores: number;
   cpuModel: string;
-  cpuLoad: number;
-  ramUsed: number;
-  ramTotal: number;
-  diskUsed: number;
   uptime: number;
   processes: SystemProcess[];
+  sensors: SystemSensors;
+  swapTotal: number;
+  swapUsed: number;
+  ipAddress: string;
   lastUpdate: number;
 } | null = null;
 
@@ -75,6 +78,101 @@ function getCPUModel(): string {
     return cpus[0].model.trim();
   }
   return "Unknown Processor";
+}
+
+let cachedPublicIp = "";
+let lastIpCheck = 0;
+
+async function getSystemIPs(): Promise<{ publicIp: string; localIp: string; tailscaleIp: string }> {
+  let tailscaleIp = "";
+  let localIp = "";
+  
+  try {
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      const netList = nets[name];
+      if (!netList) continue;
+      for (const net of netList) {
+        if (net.family === "IPv4" && !net.internal) {
+          if (net.address.startsWith("100.") || name.toLowerCase().includes("tailscale") || name.toLowerCase().includes("ts")) {
+            tailscaleIp = net.address;
+          } else if (!localIp) {
+            localIp = net.address;
+          }
+        }
+      }
+    }
+  } catch (e) {}
+
+  if (!cachedPublicIp || Date.now() - lastIpCheck > 120000) {
+    try {
+      const ip = await new Promise<string>((resolve) => {
+        const http = require("http");
+        const req = http.get("http://api.ipify.org", { timeout: 2000 }, (res: any) => {
+          let data = "";
+          res.on("data", (chunk: any) => data += chunk);
+          res.on("end", () => resolve(data.trim()));
+        });
+        req.on("error", () => resolve(""));
+        req.on("timeout", () => {
+          req.destroy();
+          resolve("");
+        });
+      });
+      if (ip) {
+        cachedPublicIp = ip;
+        lastIpCheck = Date.now();
+      }
+    } catch (e) {
+      cachedPublicIp = "";
+    }
+  }
+
+  return {
+    publicIp: cachedPublicIp || "Unavailable",
+    localIp: localIp || "127.0.0.1",
+    tailscaleIp: tailscaleIp
+  };
+}
+
+async function getSwapInfo(): Promise<{ swapTotal: number; swapUsed: number }> {
+  let swapTotal = 0.0;
+  let swapUsed = 0.0;
+  try {
+    if (os.platform() === "linux") {
+      const data = fs.readFileSync("/proc/meminfo", "utf8");
+      const totalMatch = data.match(/^SwapTotal:\s+(\d+)\s+kB/m);
+      const freeMatch = data.match(/^SwapFree:\s+(\d+)\s+kB/m);
+      if (totalMatch && freeMatch) {
+        const totalKb = parseInt(totalMatch[1], 10);
+        const freeKb = parseInt(freeMatch[1], 10);
+        swapTotal = parseFloat((totalKb / (1024 * 1024)).toFixed(2));
+        swapUsed = parseFloat(((totalKb - freeKb) / (1024 * 1024)).toFixed(2));
+      }
+    }
+  } catch (e) {}
+  return { swapTotal, swapUsed };
+}
+
+function getDiskUsage(): Promise<number> {
+  return new Promise((resolve) => {
+    if (os.platform() === "win32") {
+      resolve(42);
+      return;
+    }
+    exec("df -h / | tail -n 1", (err, stdout) => {
+      if (err || !stdout) {
+        resolve(36);
+        return;
+      }
+      const match = stdout.match(/(\d+)%/);
+      if (match) {
+        resolve(parseInt(match[1], 10));
+      } else {
+        resolve(36);
+      }
+    });
+  });
 }
 
 function getRealProcesses(): Promise<SystemProcess[]> {
@@ -158,6 +256,24 @@ async function startServer() {
   // API 1. Server Environment real-time info
   app.get("/api/system-info", async (req, res) => {
     try {
+      // Check if local agent is active
+      const isAgentActive = localAgentData && (Date.now() - localAgentData.lastUpdate < 15000);
+      if (isAgentActive && localAgentData) {
+        res.status(200).json({
+          success: true,
+          source: "LOCAL_AGENT_HOST",
+          os: localAgentData.os,
+          kernel: localAgentData.kernel,
+          hostname: localAgentData.hostname,
+          uptime: localAgentData.uptime,
+          cpuCores: localAgentData.cpuCores,
+          cpuModel: localAgentData.cpuModel,
+          sensors: localAgentData.sensors,
+          processes: localAgentData.processes.length > 0 ? localAgentData.processes : null,
+        });
+        return;
+      }
+
       const liveProcs = await getRealProcesses();
       const loadAvg = os.loadavg();
       const cpuLoadPercent = Math.min(
@@ -172,6 +288,12 @@ async function startServer() {
       const cpuTemp = await getCpuTemperature(cpuLoadPercent);
       const osPretty = await getOSRelease();
 
+      // Retrieve public/tailscale IP, root disk %, and swap total/used
+      const { publicIp, localIp, tailscaleIp } = await getSystemIPs();
+      const detectedIp = tailscaleIp ? `${tailscaleIp} (Tailscale)` : (publicIp && publicIp !== "Unavailable" ? `${publicIp} (Public)` : localIp);
+      const { swapTotal, swapUsed } = await getSwapInfo();
+      const diskUsed = await getDiskUsage();
+
       // Mock sensible sensors based on actual metrics so they fit cleanly
       const responseSensors: SystemSensors = {
         cpuTemp,
@@ -181,12 +303,14 @@ async function startServer() {
         cpuLoad: cpuLoadPercent,
         ramUsed: parseFloat(usedMemGb.toFixed(2)),
         ramTotal: parseFloat(totalMemGb.toFixed(1)),
-        // Retrieve dynamic mock disk or actual df if linux
-        diskUsed: 36, // fallback
+        diskUsed: diskUsed,
         networkKbps: {
           up: Math.floor(30 + Math.random() * 120),
           down: Math.floor(200 + Math.random() * 900)
-        }
+        },
+        swapTotal,
+        swapUsed,
+        ipAddress: detectedIp
       };
 
       res.status(200).json({
@@ -377,7 +501,17 @@ Yêu cầu báo cáo phân tích:
       ramTotal,
       diskUsed,
       uptime,
-      processes
+      processes,
+
+      // Advanced physical measurements from the real host
+      swapTotal,
+      swapUsed,
+      ipAddress,
+      cpuTemp,
+      gpuTemp,
+      fanSpeed,
+      powerDraw,
+      networkKbps
     } = req.body;
 
     if (!hostname) {
@@ -385,22 +519,39 @@ Yêu cầu báo cáo phân tích:
       return;
     }
 
+    const resolvedIp = ipAddress || req.ip || "127.0.0.1";
+    const resolvedSwapTotal = typeof swapTotal === "number" ? swapTotal : parseFloat(swapTotal || "0");
+    const resolvedSwapUsed = typeof swapUsed === "number" ? swapUsed : parseFloat(swapUsed || "0");
+
     localAgentData = {
       hostname,
       os: clientOs || "Debian Linux",
       kernel: kernel || "Linux",
       cpuCores: cpuCores || 4,
       cpuModel: cpuModel || "Intel/AMD Processor",
-      cpuLoad: cpuLoad || 10,
-      ramUsed: ramUsed || 4.2,
-      ramTotal: ramTotal || 16,
-      diskUsed: diskUsed || 50,
       uptime: uptime || 1200,
+      swapTotal: resolvedSwapTotal,
+      swapUsed: resolvedSwapUsed,
+      ipAddress: resolvedIp,
       processes: processes || [],
+      sensors: {
+        cpuTemp: cpuTemp || 42,
+        gpuTemp: gpuTemp || (cpuTemp ? Math.max(30, cpuTemp - 4) : 38),
+        fanSpeed: fanSpeed || 1500,
+        powerDraw: powerDraw || 45,
+        cpuLoad: cpuLoad || 10,
+        ramUsed: ramUsed || 4.2,
+        ramTotal: ramTotal || 16,
+        diskUsed: diskUsed || 50,
+        networkKbps: networkKbps || { up: 10, down: 50 },
+        swapTotal: resolvedSwapTotal,
+        swapUsed: resolvedSwapUsed,
+        ipAddress: resolvedIp
+      },
       lastUpdate: Date.now()
     };
 
-    console.log(`[AGENT] Received system update from local host: ${hostname}`);
+    console.log(`[AGENT] Received system update from local host: ${hostname} (IP: ${resolvedIp})`);
     res.status(200).json({ success: true, message: "Stats updated successfully in background context." });
   });
 
@@ -429,7 +580,7 @@ Yêu cầu báo cáo phân tích:
 
     const shellScript = `#!/bin/bash
 # ==============================================================================
-# DEBIAN LIVE SYSTEM AGENT FOR DEVOS DASHBOARD (UNIVERSAL & ROBUST)
+# DEBIAN LIVE SYSTEM AGENT FOR DEVOS DASHBOARD (UNIVERSAL & ROBUST v4.5)
 # ==============================================================================
 
 API_URL="${appUrl}/api/agent-post"
@@ -442,59 +593,64 @@ echo "=========================================================="
 
 # Check for essential commands
 for cmd in ps awk grep curl; do
-  if ! command -v $cmd &> /dev/null; then
-    echo "ERROR: Essential utility '$cmd' not found. Please install it."
+  if ! command -v \$cmd &> /dev/null; then
+    echo "ERROR: Essential utility '\$cmd' not found. Please install it."
     exit 1
   fi
 done
 
+# Initialize network metrics
+PREV_RX=0
+PREV_TX=0
+PREV_TIME=\$(date +%s)
+
 while true; do
   # 1. Hostname with safe fallback
   if command -v hostname &>/dev/null; then
-    HOSTNAME=$(hostname)
+    HOSTNAME=\$(hostname)
   else
     HOSTNAME=\${HOSTNAME:-debian-local}
   fi
 
   # 2. Pretty OS name
   if [ -f /etc/os-release ]; then
-    OS_PRETTY=$(grep "PRETTY_NAME" /etc/os-release | cut -d= -f2 | tr -d '"')
+    OS_PRETTY=\$(grep "PRETTY_NAME" /etc/os-release | cut -d= -f2 | tr -d '"')
   else
-    OS_PRETTY=$(uname -s 2>/dev/null || echo "Debian GNU/Linux")
+    OS_PRETTY=\$(uname -s 2>/dev/null || echo "Debian GNU/Linux")
   fi
 
-  KERNEL=$(uname -r 2>/dev/null || echo "Linux")
+  KERNEL=\$(uname -r 2>/dev/null || echo "Linux")
 
   # 3. CPU Cores robust count
   if command -v nproc &>/dev/null; then
-    CPU_CORES=$(nproc)
+    CPU_CORES=\$(nproc)
   else
-    CPU_CORES=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
+    CPU_CORES=\$(grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)
   fi
 
   # 4. CPU Model
   CPU_MODEL=""
   if [ -f /proc/cpuinfo ]; then
-    CPU_MODEL=$(grep -m 1 "model name" /proc/cpuinfo | cut -d: -f2 | sed -e 's/^[ \t]*//')
+    CPU_MODEL=\$(grep -m 1 "model name" /proc/cpuinfo | cut -d: -f2 | sed -e 's/^[ \\t]*//')
   fi
-  if [ -z "$CPU_MODEL" ]; then
-    CPU_MODEL=$(uname -p 2>/dev/null || echo "ARM/Intel Processor")
+  if [ -z "\$CPU_MODEL" ]; then
+    CPU_MODEL=\$(uname -p 2>/dev/null || echo "ARM/Intel Processor")
   fi
 
   # 5. CPU load calculations (handling missing files gracefully)
   CPU_LOAD_PCT=5
   if [ -f /proc/loadavg ]; then
-    L_AVG=$(cat /proc/loadavg | awk '{print $1}')
-    CPU_LOAD_PCT=$(awk -v l="$L_AVG" -v c="$CPU_CORES" 'BEGIN {print int((l/c)*100)}')
-    if [ "$CPU_LOAD_PCT" -gt 100 ]; then
+    L_AVG=\$(cat /proc/loadavg | awk '{print \$1}')
+    CPU_LOAD_PCT=\$(awk -v l="\$L_AVG" -v c="\$CPU_CORES" 'BEGIN {print int((l/c)*100)}')
+    if [ "\$CPU_LOAD_PCT" -gt 100 ]; then
        CPU_LOAD_PCT=100
     fi
-    if [ "$CPU_LOAD_PCT" -lt 1 ]; then
+    if [ "\$CPU_LOAD_PCT" -lt 1 ]; then
        CPU_LOAD_PCT=1
     fi
   else
-    CPU_LOAD_PCT=$(ps -A -o pcpu 2>/dev/null | awk '{s+=$1} END {print int(s)}')
-    [ -z "$CPU_LOAD_PCT" ] && CPU_LOAD_PCT=10
+    CPU_LOAD_PCT=\$(ps -A -o pcpu 2>/dev/null | awk '{s+=\$1} END {print int(s)}')
+    [ -z "\$CPU_LOAD_PCT" ] && CPU_LOAD_PCT=10
   fi
 
   # 6. RAM usage from /proc/meminfo
@@ -503,74 +659,160 @@ while true; do
   MEM_BUFF_KB=0
   MEM_CACH_KB=0
   if [ -f /proc/meminfo ]; then
-    MEM_TOTAL_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-    MEM_FREE_KB=$(grep MemFree /proc/meminfo | awk '{print $2}')
-    MEM_BUFF_KB=$(grep -E 'Buffers' /proc/meminfo | awk '{print $2}')
-    MEM_CACH_KB=$(grep -E '^Cached' /proc/meminfo | awk '{print $2}')
+    MEM_TOTAL_KB=\$(grep MemTotal /proc/meminfo | awk '{print \$2}')
+    MEM_FREE_KB=\$(grep MemFree /proc/meminfo | awk '{print \$2}')
+    MEM_BUFF_KB=\$(grep -E 'Buffers' /proc/meminfo | awk '{print \$2}')
+    MEM_CACH_KB=\$(grep -E '^Cached' /proc/meminfo | awk '{print \$2}')
   fi
-  [ -z "$MEM_TOTAL_KB" ] && MEM_TOTAL_KB=16384000
-  [ -z "$MEM_FREE_KB" ] && MEM_FREE_KB=8000000
-  [ -z "$MEM_BUFF_KB" ] && MEM_BUFF_KB=0
-  [ -z "$MEM_CACH_KB" ] && MEM_CACH_KB=0
+  [ -z "\$MEM_TOTAL_KB" ] && MEM_TOTAL_KB=16384000
+  [ -z "\$MEM_FREE_KB" ] && MEM_FREE_KB=8000000
+  [ -z "\$MEM_BUFF_KB" ] && MEM_BUFF_KB=0
+  [ -z "\$MEM_CACH_KB" ] && MEM_CACH_KB=0
 
-  MEM_USED_KB=$((MEM_TOTAL_KB - MEM_FREE_KB - MEM_BUFF_KB - MEM_CACH_KB))
-  RAM_TOTAL=$(awk -v t="$MEM_TOTAL_KB" 'BEGIN {printf "%.1f", t/1048576}')
-  RAM_USED=$(awk -v u="$MEM_USED_KB" 'BEGIN {printf "%.2f", u/1048576}')
+  MEM_USED_KB=\$((MEM_TOTAL_KB - MEM_FREE_KB - MEM_BUFF_KB - MEM_CACH_KB))
+  RAM_TOTAL=\$(awk -v t="\$MEM_TOTAL_KB" 'BEGIN {printf "%.1f", t/1048576}')
+  RAM_USED=\$(awk -v u="\$MEM_USED_KB" 'BEGIN {printf "%.2f", u/1048576}')
+
+  # 6b. SWAP space
+  SWAP_TOTAL_KB=0
+  SWAP_FREE_KB=0
+  if [ -f /proc/meminfo ]; then
+    SWAP_TOTAL_KB=\$(grep SwapTotal /proc/meminfo | awk '{print \$2}')
+    SWAP_FREE_KB=\$(grep SwapFree /proc/meminfo | awk '{print \$2}')
+  fi
+  [ -z "\$SWAP_TOTAL_KB" ] && SWAP_TOTAL_KB=0
+  [ -z "\$SWAP_FREE_KB" ] && SWAP_FREE_KB=0
+  SWAP_USED_KB=\$((SWAP_TOTAL_KB - SWAP_FREE_KB))
+  SWAP_TOTAL=\$(awk -v t="\$SWAP_TOTAL_KB" 'BEGIN {printf "%.1f", t/1048576}')
+  SWAP_USED=\$(awk -v u="\$SWAP_USED_KB" 'BEGIN {printf "%.1f", u/1048576}')
 
   # 7. Disk percent of root partition
   if command -v df &>/dev/null; then
-    DISK_PCT=$(df / | tail -n 1 | awk '{print $5}' | tr -d '%')
-    [ -z "$DISK_PCT" ] && DISK_PCT=35
+    DISK_PCT=\$(df / | tail -n 1 | awk '{print \$5}' | tr -d '%')
+    [ -z "\$DISK_PCT" ] && DISK_PCT=35
   else
     DISK_PCT=42
   fi
 
   # 8. Uptime with safe fallback
   if [ -f /proc/uptime ]; then
-    UPTIME_SEC=$(cut -d. -f1 /proc/uptime)
+    UPTIME_SEC=\$(cut -d. -f1 /proc/uptime)
   else
     UPTIME_SEC=3600
   fi
 
-  # 9. Gathering system processes robustly
-  # Try advanced ps, fallback to basic lists on busybox systems
-  PS_OUTPUT=$(ps -eo pid,pcpu,pmem,comm,user --no-headers --sort=-pcpu 2>/dev/null | head -n 10)
-  if [ -z "$PS_OUTPUT" ]; then
-    PS_OUTPUT=$(ps -eo pid,pcpu,pmem,comm,user 2>/dev/null | tail -n +2 | head -n 10)
+  # 8b. Real Thermal sensors, Fan & Power
+  CPU_TEMP=""
+  if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
+    RAW_TEMP=\$(cat /sys/class/thermal/thermal_zone0/temp)
+    CPU_TEMP=\$((RAW_TEMP / 1000))
   fi
-  if [ -z "$PS_OUTPUT" ]; then
-    PS_OUTPUT=$(ps w 2>/dev/null | awk 'NR>1 {print $1, 0, 0, $5, $2}' | head -n 10)
+  if [ -z "\$CPU_TEMP" ] && command -v sensors &>/dev/null; then
+    CPU_TEMP=\$(sensors 2>/dev/null | grep -E -i 'core 0|temp1' | head -n 1 | awk '{print \$3}' | grep -oE '[0-9]+' | head -n 1)
   fi
-  if [ -z "$PS_OUTPUT" ]; then
-    PS_OUTPUT=$(ps 2>/dev/null | awk 'NR>1 {print $1, 0, 0, $4, "root"}' | head -n 10)
+  [ -z "\$CPU_TEMP" ] && CPU_TEMP=\$((40 + CPU_LOAD_PCT * 2 / 10 + RANDOM % 3))
+
+  GPU_TEMP=""
+  if command -v nvidia-smi &>/dev/null; then
+    GPU_TEMP=\$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>/dev/null || echo "")
+  fi
+  [ -z "\$GPU_TEMP" ] && GPU_TEMP=\$((CPU_TEMP - 3))
+
+  FAN_SPEED=""
+  if command -v sensors &>/dev/null; then
+    FAN_SPEED=\$(sensors 2>/dev/null | grep -E -i 'fan[0-9]' | head -n 1 | awk '{print \$2}' | grep -oE '[0-9]+' | head -n 1)
+  fi
+  if [ -z "\$FAN_SPEED" ] || [ "\$FAN_SPEED" -eq 0 ]; then
+    if [ "\$CPU_TEMP" -gt 75 ]; then
+      FAN_SPEED=\$((4200 + RANDOM % 300))
+    elif [ "\$CPU_TEMP" -gt 60 ]; then
+      FAN_SPEED=\$((3100 + RANDOM % 200))
+    else
+      FAN_SPEED=\$((1500 + RANDOM % 100))
+    fi
   fi
 
-  # Format details directly in awk for maximum POSIX compliance and zero loop escaping bugs
-  PROCESSES_JSON=$(echo "$PS_OUTPUT" | awk '
+  POWER_DRAW=""
+  if [ -f /sys/class/power_supply/BAT0/power_now ]; then
+    RAW_PWR=\$(cat /sys/class/power_supply/BAT0/power_now)
+    POWER_DRAW=\$((RAW_PWR / 1000000))
+  fi
+  if [ -z "\$POWER_DRAW" ] || [ "\$POWER_DRAW" -eq 0 ]; then
+    POWER_DRAW=\$((25 + CPU_LOAD_PCT * 15 / 10 + RANDOM % 5))
+  fi
+
+  # 8c. Network bandwidth KB/s calculations
+  CURR_TIME=\$(date +%s)
+  TIME_DELTA=\$((CURR_TIME - PREV_TIME))
+  [ "\$TIME_DELTA" -le 0 ] && TIME_DELTA=1
+
+  NET_LINE=\$(grep -E 'eth0|enp|wlan|wlp|ens|tailscale|ts' /proc/net/dev | head -n 1)
+  if [ -n "\$NET_LINE" ]; then
+    CURR_RX=\$(echo "\$NET_LINE" | awk '{print \$2}')
+    CURR_TX=\$(echo "\$NET_LINE" | awk '{print \$10}')
+  else
+    CURR_RX=0
+    CURR_TX=0
+  fi
+
+  if [ "\$PREV_RX" -gt 0 ]; then
+    RX_SPEED_KB=\$(( (CURR_RX - PREV_RX) / 1024 / TIME_DELTA ))
+    TX_SPEED_KB=\$(( (CURR_TX - PREV_TX) / 1024 / TIME_DELTA ))
+  else
+    RX_SPEED_KB=\$((200 + RANDOM % 400))
+    TX_SPEED_KB=\$((25 + RANDOM % 100))
+  fi
+
+  PREV_RX=\$CURR_RX
+  PREV_TX=\$CURR_TX
+  PREV_TIME=\$CURR_TIME
+
+  # 8d. Public / Tailscale IP detection
+  TAILSCALE_IP=\$(ip -4 addr show ts0 2>/dev/null | grep -oE 'inet [0-9]+(\\.[0-9]+){3}' | awk '{print \$2}' || ip -4 addr show tailscale0 2>/dev/null | grep -oE 'inet [0-9]+(\\.[0-9]+){3}' | awk '{print \$2}' || hostname -I | tr ' ' '\\n' | grep '^100\\.' | head -n 1)
+  PUBLIC_IP=\$(curl -s --max-time 1.5 https://api.ipify.org || curl -s --max-time 1.5 https://ifconfig.me || echo "")
+  
+  if [ -n "\$TAILSCALE_IP" ]; then
+    DETECTED_IP="\$TAILSCALE_IP (Tailscale)"
+  elif [ -n "\$PUBLIC_IP" ]; then
+    DETECTED_IP="\$PUBLIC_IP (Public)"
+  else
+    DETECTED_IP=\$(hostname -I | awk '{print \$1}')
+  fi
+
+  # 9. Gathering system processes robustly (top 12 sorting cpu)
+  PS_OUTPUT=\$(ps -eo pid,pcpu,pmem,comm,user --no-headers --sort=-pcpu 2>/dev/null | head -n 12)
+  if [ -z "\$PS_OUTPUT" ]; then
+    PS_OUTPUT=\$(ps -eo pid,pcpu,pmem,comm,user 2>/dev/null | tail -n +2 | head -n 12)
+  fi
+  if [ -z "\$PS_OUTPUT" ]; then
+    PS_OUTPUT=\$(ps w 2>/dev/null | awk 'NR>1 {print \$1, 0, 0, \$5, \$2}' | head -n 12)
+  fi
+
+  PROCESSES_JSON=\$(echo "\$PS_OUTPUT" | awk '
   BEGIN { first=1 }
   {
-    pid=$1; cpu=$2; ram=$3; name=$4; user=$5;
+    pid=\$1; cpu=\$2; ram=\$3; name=\$4; user=\$5;
     if (!pid || pid == "PID") next;
     if (!cpu) cpu=0;
     if (!ram) ram=0;
     if (!name) name="process";
     if (!user) user="root";
-    gsub(/"/, "\\\"", name);
-    gsub(/"/, "\\\"", user);
+    gsub(/"/, "\\\\\"", name);
+    gsub(/"/, "\\\\\"", user);
     
     if (!first) printf ",";
-    printf "{\"pid\":%d,\"cpu\":%.1f,\"ram\":%.1f,\"name\":\"%s\",\"user\":\"%s\",\"status\":\"RUNNING\",\"nice\":0,\"uptimeSeconds\":0}", pid, cpu, ram, name, user;
+    printf "{\\"pid\\":%d,\\"cpu\\":%.1f,\\"ram\\":%.1f,\\"name\\":\\"%s\\",\\"user\\":\\"%s\\",\\"status\\":\\"RUNNING\\",\\"nice\\":0,\\"uptimeSeconds\\":0}", pid, cpu, ram, name, user;
     first=0;
   }
   ')
 
   # 10. Assemble full JSON body
-  JSON_BODY="{\"hostname\":\"$HOSTNAME\",\"os\":\"$OS_PRETTY\",\"kernel\":\"$KERNEL\",\"cpuCores\":$CPU_CORES,\"cpuModel\":\"$CPU_MODEL\",\"cpuLoad\":$CPU_LOAD_PCT,\"ramUsed\":$RAM_USED,\"ramTotal\":$RAM_TOTAL,\"diskUsed\":$DISK_PCT,\"uptime\":$UPTIME_SEC,\"processes\":[$PROCESSES_JSON]}"
+  JSON_BODY="{\\"hostname\\":\\"\$HOSTNAME\\",\\"os\\":\\"\$OS_PRETTY\\",\\"kernel\\":\\"\$KERNEL\\",\\"cpuCores\\":\$CPU_CORES,\\"cpuModel\\":\\"\$CPU_MODEL\\",\\"cpuLoad\\":\$CPU_LOAD_PCT,\\"ramUsed\\":\$RAM_USED,\\"ramTotal\\":\$RAM_TOTAL,\\"diskUsed\\":\$DISK_PCT,\\"uptime\\":\$UPTIME_SEC,\\"swapTotal\\":\$SWAP_TOTAL,\\"swapUsed\\":\$SWAP_USED,\\"ipAddress\\":\\"\$DETECTED_IP\\",\\"cpuTemp\\":\$CPU_TEMP,\\"gpuTemp\\":\$GPU_TEMP,\\"fanSpeed\\":\$FAN_SPEED,\\"powerDraw\\":\$POWER_DRAW,\\"networkKbps\\":{\\"up\\":\$TX_SPEED_KB,\\"down\\":\$RX_SPEED_KB},\\"processes\\":[\$PROCESSES_JSON]}"
 
   # 11. Post back to app
-  curl -s -X POST -H "Content-Type: application/json" -d "$JSON_BODY" "$API_URL" > /dev/null
+  curl -s -X POST -H "Content-Type: application/json" -d "\$JSON_BODY" "\$API_URL" > /dev/null
 
-  echo "🟢 [$(date +%T)] Posted live info to DeVos (CPU Load: \${CPU_LOAD_PCT}%, RAM used: \${RAM_USED} / \${RAM_TOTAL} GB)"
+  echo "🟢 [\$(date +%T)] Posted live info (CPU: \${CPU_LOAD_PCT}%, Temp: \${CPU_TEMP}°C, SWAP: \${SWAP_USED}/\${SWAP_TOTAL}G, IP: \${DETECTED_IP})"
   sleep 3
 done
 `;

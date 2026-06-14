@@ -29,6 +29,9 @@ export interface SystemSensors {
   ramTotal: number; // GB
   diskUsed: number; // percentage
   networkKbps: { up: number; down: number };
+  swapTotal?: number;
+  swapUsed?: number;
+  ipAddress?: string;
 }
 
 export interface AgyAgent {
