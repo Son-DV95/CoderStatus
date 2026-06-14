@@ -1,0 +1,6 @@
+{
+  "name": "Terminal Dev Dashboard",
+  "description": "Hệ thống quản lý công việc và giám sát trạng thái phong cách Terminal. Hỗ trợ quản lý task hằng ngày, theo dõi htop, hiệu năng PC, AGY, Codex, Sensors cực kỳ thực dụng.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

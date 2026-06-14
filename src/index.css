@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Fira Code", "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+/* Customized scrollbar for terminal elements */
+.file-scroller::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.file-scroller::-webkit-scrollbar-track {
+  background: #06090d;
+}
+.file-scroller::-webkit-scrollbar-thumb {
+  background: #10b98140;
+  border-radius: 4px;
+}
+.file-scroller::-webkit-scrollbar-thumb:hover {
+  background: #10b98180;
+}
+
+/* Custom terminal scanning lines effect */
+@keyframes crt-flicker {
+  0% { opacity: 0.985; }
+  50% { opacity: 1; }
+  100% { opacity: 0.985; }
+}
+
+.crt-screen {
+  animation: crt-flicker 0.15s infinite;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+  background-size: 100% 4px, 6px 100%;
+}
+
+/* Matrix glow utilities */
+.glow-emerald {
+  text-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+}
+
+.glow-orange {
+  text-shadow: 0 0 8px rgba(249, 115, 22, 0.5);
+}
+
+.glow-purple {
+  text-shadow: 0 0 8px rgba(168, 85, 247, 0.5);
+}
+
+input:focus, select:focus {
+  outline: none;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+}
