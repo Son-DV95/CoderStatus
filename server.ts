@@ -224,23 +224,44 @@ function getRealProcesses(): Promise<SystemProcess[]> {
 
 function getCpuTemperature(cpuLoadPercent: number): Promise<number> {
   return new Promise((resolve) => {
-    // Read standard Linux thermal file if exists
-    fs.readFile("/sys/class/thermal/thermal_zone0/temp", "utf8", (err, data) => {
-      if (err || !data) {
-        // Fallback temperature formula based on dynamic CPU load
-        // This makes temperature react realistically to CPU load (unlike standing flat at ~38)
-        const baseTemp = 41;
-        const loadFactor = cpuLoadPercent || 5;
-        const calculatedTemp = Math.round(baseTemp + (loadFactor * 0.36) + (Math.random() - 0.5) * 3);
-        resolve(Math.min(92, Math.max(35, calculatedTemp)));
-        return;
+    // Try running 'sensors' first
+    exec("sensors 2>/dev/null", (err, stdout) => {
+      if (!err && stdout) {
+        const lines = stdout.split("\n");
+        const matchPatterns = [/package id 0/i, /core 0/i, /temp1/i, /tctl/i, /tdie/i];
+        for (const pattern of matchPatterns) {
+          const matchLine = lines.find(l => pattern.test(l));
+          if (matchLine) {
+            const tempMatch = matchLine.match(/[-+][0-9]+(\.[0-9]+)?/);
+            if (tempMatch) {
+              const tempVal = Math.round(parseFloat(tempMatch[0]));
+              if (!isNaN(tempVal)) {
+                resolve(tempVal);
+                return;
+              }
+            }
+          }
+        }
       }
-      const rawTemp = parseInt(data.trim(), 10);
-      if (!isNaN(rawTemp)) {
-        resolve(Math.round(rawTemp / 1000));
-      } else {
-        resolve(Math.min(92, Math.max(35, 42 + Math.floor(cpuLoadPercent * 0.25))));
-      }
+
+      // Read standard Linux thermal file if exists
+      fs.readFile("/sys/class/thermal/thermal_zone0/temp", "utf8", (err2, data) => {
+        if (err2 || !data) {
+          // Fallback temperature formula based on dynamic CPU load
+          // This makes temperature react realistically to CPU load (unlike standing flat at ~38)
+          const baseTemp = 41;
+          const loadFactor = cpuLoadPercent || 5;
+          const calculatedTemp = Math.round(baseTemp + (loadFactor * 0.36) + (Math.random() - 0.5) * 3);
+          resolve(Math.min(92, Math.max(35, calculatedTemp)));
+          return;
+        }
+        const rawTemp = parseInt(data.trim(), 10);
+        if (!isNaN(rawTemp)) {
+          resolve(Math.round(rawTemp / 1000));
+        } else {
+          resolve(Math.min(92, Math.max(35, 42 + Math.floor(cpuLoadPercent * 0.25))));
+        }
+      });
     });
   });
 }
@@ -703,12 +724,16 @@ while true; do
 
   # 8b. Real Thermal sensors, Fan & Power
   CPU_TEMP=""
-  if [ -f /sys/class/thermal/thermal_zone0/temp ]; then
+  if command -v sensors &>/dev/null; then
+    TEMP_LINE=\$(sensors 2>/dev/null | grep -E -i 'Package id 0|Core 0|temp1|Tctl|Tdie' | head -n 1)
+    if [ -n "\$TEMP_LINE" ]; then
+      CPU_TEMP=\$(echo "\$TEMP_LINE" | awk -F: '{print \$2}' | grep -oE '[0-9]+(\.[0-9]+)?' | head -n 1)
+      CPU_TEMP=\${CPU_TEMP%.*}
+    fi
+  fi
+  if [ -z "\$CPU_TEMP" ] && [ -f /sys/class/thermal/thermal_zone0/temp ]; then
     RAW_TEMP=\$(cat /sys/class/thermal/thermal_zone0/temp)
     CPU_TEMP=\$((RAW_TEMP / 1000))
-  fi
-  if [ -z "\$CPU_TEMP" ] && command -v sensors &>/dev/null; then
-    CPU_TEMP=\$(sensors 2>/dev/null | grep -E -i 'core 0|temp1' | head -n 1 | awk '{print \$3}' | grep -oE '[0-9]+' | head -n 1)
   fi
   [ -z "\$CPU_TEMP" ] && CPU_TEMP=\$((40 + CPU_LOAD_PCT * 2 / 10 + RANDOM % 3))
 
@@ -720,7 +745,10 @@ while true; do
 
   FAN_SPEED=""
   if command -v sensors &>/dev/null; then
-    FAN_SPEED=\$(sensors 2>/dev/null | grep -E -i 'fan[0-9]' | head -n 1 | awk '{print \$2}' | grep -oE '[0-9]+' | head -n 1)
+    FAN_LINE=\$(sensors 2>/dev/null | grep -E -i 'fan[0-9]|fan' | head -n 1)
+    if [ -n "\$FAN_LINE" ]; then
+      FAN_SPEED=\$(echo "\$FAN_LINE" | awk -F: '{print \$2}' | grep -oE '[0-9]+' | head -n 1)
+    fi
   fi
   if [ -z "\$FAN_SPEED" ] || [ "\$FAN_SPEED" -eq 0 ]; then
     if [ "\$CPU_TEMP" -gt 75 ]; then
