@@ -28,7 +28,7 @@ export default function HtopMonitor({
   const [showAllProcesses, setShowAllProcesses] = useState(false);
   const [showCleanPanel, setShowCleanPanel] = useState(false);
   const [isCleaning, setIsCleaning] = useState(false);
-  const [cleanTargets, setCleanTargets] = useState<string[]>(['node', 'vite', 'react', 'ollama', 'tmp_logs']);
+  const [cleanTargets, setCleanTargets] = useState<string[]>(['node', 'vite', 'react', 'ollama', 'tmp_logs', 'stale_apps']);
   const [cleanLogs, setCleanLogs] = useState<string[]>([]);
   const [cleanReport, setCleanReport] = useState<{ reclaimedMb: number; killedThreads: number; details: any } | null>(null);
 
@@ -99,10 +99,18 @@ export default function HtopMonitor({
   }, [processes, onUpdateSensors, dataSource]);
 
   // Handle killing a process
-  const handleKill = (pid: number, name: string) => {
+  const handleKill = async (pid: number, name: string) => {
     onSetProcesses(prev => prev.filter(p => p.pid !== pid));
     playErrorBuzz();
     logsTerminal(`SIGKILL [9] delivered to process PID ${pid} [${name}]. Memory freed.`, 'error');
+    
+    try {
+      await fetch('/api/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pid, name })
+      });
+    } catch (e) {}
   };
 
   // Adjust nice level of a process
@@ -189,6 +197,10 @@ export default function HtopMonitor({
     if (cleanTargets.includes('ollama')) {
       setCleanLogs(prev => [...prev, '[QUÉT] Pruning inactive Ollama model contexts...']);
       await sleep(400);
+    }
+    if (cleanTargets.includes('stale_apps')) {
+      setCleanLogs(prev => [...prev, '[QUÉT] Đóng triệt tàn dư zombie cụm DarkLust & RPChat...']);
+      await sleep(350);
     }
 
     try {
@@ -392,7 +404,19 @@ export default function HtopMonitor({
               />
               <span className="text-zinc-400 text-[10px]">Ollama Background Contexts</span>
             </label>
-            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer col-span-2 select-none">
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={cleanTargets.includes('stale_apps')}
+                onChange={() => {
+                  playTick();
+                  setCleanTargets(prev => prev.includes('stale_apps') ? prev.filter(t => t !== 'stale_apps') : [...prev, 'stale_apps']);
+                }}
+                className="accent-amber-500 cursor-pointer"
+              />
+              <span className="text-zinc-400 text-[10px] font-bold text-amber-300">Đóng sập DarkLust & RPChat cũ</span>
+            </label>
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer select-none">
               <input 
                 type="checkbox" 
                 checked={cleanTargets.includes('tmp_logs')}
@@ -402,7 +426,7 @@ export default function HtopMonitor({
                 }}
                 className="accent-amber-500 cursor-pointer"
               />
-              <span className="text-zinc-400 text-[10px]">Nhật ký rác tạm hệ thống (/tmp/*.log)</span>
+              <span className="text-zinc-400 text-[10px]">Nhật ký tạm hệ thống (/tmp/*.log)</span>
             </label>
           </div>
 

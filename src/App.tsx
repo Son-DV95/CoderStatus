@@ -240,11 +240,19 @@ export default function App() {
   };
 
   // Kill Process from terminal / UI
-  const handleKillProcess = (pid: number) => {
+  const handleKillProcess = async (pid: number) => {
     const proc = processes.find(p => p.pid === pid);
     if (proc) {
       setProcesses(prev => prev.filter(p => p.pid !== pid));
       logsTerminal(`[EXEC]: SIGKILL [9] đã cưỡng chế giải phóng PID ${pid} (${proc.name})`, 'error');
+      
+      try {
+        await fetch('/api/kill', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pid, name: proc.name })
+        });
+      } catch (e) {}
     }
   };
 
