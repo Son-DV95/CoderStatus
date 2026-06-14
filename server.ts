@@ -3,6 +3,7 @@ import path from "path";
 import os from "os";
 import { exec } from "child_process";
 import fs from "fs";
+import http from "http";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
@@ -110,7 +111,6 @@ async function getSystemIPs(): Promise<{ publicIp: string; localIp: string; tail
   if (!cachedPublicIp || Date.now() - lastIpCheck > 120000) {
     try {
       const ip = await new Promise<string>((resolve) => {
-        const http = require("http");
         const req = http.get("http://api.ipify.org", { timeout: 2000 }, (res: any) => {
           let data = "";
           res.on("data", (chunk: any) => data += chunk);
