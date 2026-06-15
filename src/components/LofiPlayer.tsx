@@ -11,7 +11,9 @@ import {
   Disc, 
   Sliders, 
   Activity, 
-  Radio 
+  Radio,
+  Minimize2,
+  Maximize2
 } from 'lucide-react';
 
 interface LofiTrack {
@@ -66,6 +68,7 @@ export default function LofiPlayer() {
   const [vinylVolume, setVinylVolume] = useState(0.3);
   const [soundMode, setSoundMode] = useState<'synth' | 'mp3'>('synth');
   const [timeElapsed, setTimeElapsed] = useState(0);
+  const [isCompact, setIsCompact] = useState(true);
   
   // Audio nodes for synthesis
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -473,100 +476,106 @@ export default function LofiPlayer() {
   };
 
   return (
-    <div id="lofi-rack-player" className="bg-zinc-950 border border-zinc-800 rounded-sm p-4 font-mono shadow-lg relative overflow-hidden flex flex-col gap-4">
+    <div id="lofi-rack-player" className="bg-zinc-950 border border-zinc-800 rounded-sm p-3 font-mono shadow-md relative overflow-hidden flex flex-col lg:flex-row lg:items-center justify-between gap-4 z-10 w-full transition-all duration-300">
       {/* Tape Deck Aesthetic Grid background pattern */}
-      <div className="absolute inset-0 bg-grid-slate-900 opacity-20 pointer-events-none" />
-      
-      {/* Top rack information */}
-      <div className="flex items-center justify-between border-b border-zinc-850 pb-3 z-10">
-        <div className="flex items-center gap-2">
-          <Radio className={`w-4 h-4 ${isPlaying ? 'text-orange-500 animate-pulse' : 'text-zinc-500'}`} />
-          <h2 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-1.5">
-            CAFÉ LO-FI STUDIO ACCENT
-            {isPlaying && <span className="inline-block w-1.5 h-1.5 rounded-full bg-orange-500 animate-ping" />}
-          </h2>
+      <div className="absolute inset-0 bg-grid-slate-900 opacity-10 pointer-events-none" />
+
+      {/* Main player controls - Left-hand cassette information */}
+      <div className="flex items-center gap-3 min-w-0 z-10">
+        {/* Spinning Cassette Icon */}
+        <div className={`p-1.5 bg-zinc-900 border border-zinc-800 rounded-full flex items-center justify-center relative shrink-0 ${isPlaying ? 'shadow-[0_0_10px_rgba(249,115,22,0.15)] border-orange-500/40' : ''}`}>
+          <Disc className={`w-5 h-5 text-orange-500 ${isPlaying ? 'animate-spin' : 'text-zinc-600 opacity-60'}`} style={{ animationDuration: '6s' }} />
+          <div className="absolute w-1.5 h-1.5 bg-zinc-950 rounded-full border border-zinc-800" />
         </div>
-        <div className="flex items-center gap-1.5 text-[9px] bg-zinc-900 text-zinc-400 px-2.5 py-1 border border-zinc-850 rounded-sm">
-          <Activity className="w-2.5 h-2.5 text-orange-500" />
-          <span>OUTPUT: SYNTH-CHIP STEREOPHONIC</span>
-        </div>
-      </div>
 
-      {/* Main player controls - structured like an old physical deck */}
-      <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center z-10">
-        
-        {/* Play/Pause control center */}
-        <div className="md:col-span-5 bg-zinc-900/60 p-3.5 border border-zinc-850 rounded-sm flex flex-col gap-3">
-          <div className="flex items-center gap-3">
-            {/* Spinning Cassette Icon */}
-            <div className={`p-4 bg-zinc-950 border border-zinc-800 rounded-full flex items-center justify-center relative ${isPlaying ? 'shadow-[0_0_15px_rgba(249,115,22,0.15)] border-orange-500/30' : ''}`}>
-              <Disc className={`w-8 h-8 text-orange-500 ${isPlaying ? 'animate-spin' : 'text-zinc-650 opacity-60'}`} style={{ animationDuration: '6s' }} />
-              <div className="absolute w-3 h-3 bg-zinc-900 rounded-full border border-zinc-700" />
-            </div>
-
-            <div className="flex-grow min-w-0">
-              <div className="text-[10px] text-zinc-500 uppercase tracking-widest leading-none font-semibold">ĐANG PHÁT</div>
-              <div className="text-[12px] text-zinc-100 font-bold tracking-tight truncate mt-1">
-                {currentTrack.name}
-              </div>
-              <div className="text-[10px] text-orange-400/90 font-medium truncate">
-                by {currentTrack.artist}
-              </div>
-            </div>
-          </div>
-
-          {/* Cassette deck interactive details */}
-          <div className="bg-zinc-950 p-2 border border-zinc-850/80 rounded-sm flex justify-between items-center text-[10px] font-mono">
-            <span className="text-zinc-500 font-bold uppercase select-none">COUNTER TAPE</span>
-            <span className="text-emerald-400 bg-emerald-950/20 px-2 py-0.5 border border-emerald-950 rounded-sm font-semibold tracking-widest text-[10.5px]">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 select-none">
+            <span className="text-[9px] text-zinc-500 uppercase tracking-widest leading-none font-bold">LO-FI ACCENT</span>
+            <span className="text-[9px] text-emerald-400 bg-emerald-950/20 px-1 border border-emerald-950 rounded-sm font-semibold tracking-wider">
               {isPlaying ? formatTime(timeElapsed) : '00:00'}
             </span>
           </div>
-
-          {/* Action Tape Buttons bar */}
-          <div className="flex gap-2">
-            <button
-              onClick={togglePlay}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-sm text-[10.5px] font-bold uppercase transition-all border cursor-pointer ${
-                isPlaying 
-                  ? 'bg-orange-500/15 text-orange-400 border-orange-500/30 hover:bg-orange-500/20 shadow-[0_0_8px_rgba(249,115,22,0.1)]' 
-                  : 'bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border-emerald-800'
-              }`}
-            >
-              {isPlaying ? (
-                <>
-                  <Pause className="w-3.5 h-3.5 fill-current" />
-                  <span>TẠM DỪNG</span>
-                </>
-              ) : (
-                <>
-                  <Play className="w-3.5 h-3.5 fill-current animate-pulse" />
-                  <span>PHÁT NHẠC ☕</span>
-                </>
-              )}
-            </button>
-
-            <button
-              onClick={handleNext}
-              className="px-3 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 hover:text-white rounded-sm transition-all flex items-center justify-center cursor-pointer"
-              title="Next Track"
-            >
-              <SkipForward className="w-3.5 h-3.5" />
-            </button>
+          <div className="text-[11px] text-zinc-150 font-bold tracking-tight truncate mt-0.5">
+            {currentTrack.name}
           </div>
         </div>
 
-        {/* Master sliders & track customization controls */}
-        <div className="md:col-span-7 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* Customizer Slider: MASTER VOLUME */}
-            <div className="bg-zinc-900/40 p-2.5 border border-zinc-850/80 rounded-sm space-y-2">
-              <div className="flex justify-between items-center text-[9.5px]">
-                <span className="text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <Volume2 className="w-3 h-3 text-orange-500" />
-                  ÂM LƯỢNG MASTER
-                </span>
-                <span className="text-orange-400 font-semibold">{Math.round(volume * 100)}%</span>
+        {/* Action buttons */}
+        <div className="flex items-center gap-1.5 ml-2">
+          <button
+            onClick={togglePlay}
+            className={`flex items-center justify-center gap-1 px-3 py-1 rounded-sm text-[10px] font-bold uppercase transition-all border cursor-pointer ${
+              isPlaying 
+                ? 'bg-orange-500/15 text-orange-400 border-orange-500/30 hover:bg-orange-500/20 shadow-[0_0_8px_rgba(249,115,22,0.1)]' 
+                : 'bg-emerald-950 hover:bg-emerald-900 text-emerald-400 border-emerald-800'
+            }`}
+          >
+            {isPlaying ? (
+              <>
+                <Pause className="w-3 h-3 fill-current" />
+                <span>PAUSE</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-3 h-3 fill-current animate-pulse" />
+                <span>PLAY</span>
+              </>
+            )}
+          </button>
+          <button
+            onClick={handleNext}
+            className="p-1 px-2.5 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 border border-zinc-800 hover:text-white rounded-sm transition-all flex items-center justify-center cursor-pointer"
+            title="Next Track"
+          >
+            <SkipForward className="w-3 h-3" />
+          </button>
+        </div>
+      </div>
+
+      {!isCompact && (
+        <>
+          {/* Album Dropdown Selector & Spectral Analyzer (Center) */}
+          <div className="flex flex-wrap items-center gap-3 z-10 transition-all duration-200">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[9px] text-zinc-500 font-bold uppercase select-none">ALBUM:</span>
+              <select 
+                value={currentTrackIndex} 
+                onChange={(e) => changeTrack(parseInt(e.target.value))}
+                className="bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 hover:border-zinc-700 rounded-sm text-[10px] py-1 px-2 text-zinc-300 focus:outline-none focus:border-orange-500 max-w-[170px] cursor-pointer"
+              >
+                {LOFI_TRACKS.map((track, idx) => (
+                  <option key={track.id} value={idx}>
+                    {track.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Tiny spectral analyzer */}
+            <div className="bg-zinc-900/60 py-1 px-2 border border-zinc-850 rounded-sm flex items-center gap-2 h-7 pointer-events-none">
+              <span className="text-[8px] text-zinc-500 font-bold tracking-widest uppercase">SPECTRAL</span>
+              <div className="flex items-end gap-0.5 h-3.5 w-14">
+                {vuLevels.slice(0, 6).map((lvl, i) => (
+                  <div key={i} className="flex-1 bg-zinc-850 h-full rounded-sm overflow-hidden flex flex-col justify-end">
+                    <div 
+                      className={`w-full transition-all duration-100 ${
+                        lvl > 75 ? 'bg-red-500' : lvl > 50 ? 'bg-orange-400' : 'bg-emerald-500'
+                      }`}
+                      style={{ height: `${isPlaying ? lvl : 12}%` }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Sliders Area (Right-hand) */}
+          <div className="flex flex-wrap md:flex-nowrap items-center gap-3 z-10 transition-all duration-200">
+            {/* Sliders: MASTER VOLUME */}
+            <div className="bg-zinc-900/40 p-1.5 px-2 border border-zinc-900 rounded-sm flex items-center gap-2">
+              <div className="flex items-center gap-1 text-[9px] font-bold text-zinc-400 select-none">
+                <Volume2 className="w-3 h-3 text-orange-500" />
+                <span>MSTR</span>
               </div>
               <input
                 type="range"
@@ -575,18 +584,16 @@ export default function LofiPlayer() {
                 step="0.05"
                 value={volume}
                 onChange={(e) => setVolume(parseFloat(e.target.value))}
-                className="w-full accent-orange-500 cursor-pointer h-1 bg-zinc-800 rounded-none overflow-hidden"
+                className="w-16 accent-orange-500 cursor-pointer h-1 bg-zinc-850 rounded-none overflow-hidden"
               />
+              <span className="text-orange-400 text-[9px] font-semibold w-7 text-right">{Math.round(volume * 100)}%</span>
             </div>
 
-            {/* Customizer Slider: RAIN INTENSITY */}
-            <div className="bg-zinc-900/40 p-2.5 border border-zinc-850/80 rounded-sm space-y-2">
-              <div className="flex justify-between items-center text-[9.5px]">
-                <span className="text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <CloudRain className="w-3 h-3 text-sky-400" />
-                  MƯA NGOÀI CỬA SỔ
-                </span>
-                <span className="text-sky-400 font-semibold">{Math.round(rainVolume * 100)}%</span>
+            {/* Sliders: RAIN */}
+            <div className="bg-zinc-900/40 p-1.5 px-2 border border-zinc-900 rounded-sm flex items-center gap-2">
+              <div className="flex items-center gap-1 text-[9px] font-bold text-zinc-400 select-none">
+                <CloudRain className="w-3 h-3 text-sky-400" />
+                <span>RAIN</span>
               </div>
               <input
                 type="range"
@@ -595,21 +602,16 @@ export default function LofiPlayer() {
                 step="0.05"
                 value={rainVolume}
                 onChange={(e) => setRainVolume(parseFloat(e.target.value))}
-                className="w-full cursor-pointer h-1 rounded-none overflow-hidden accent-sky-500"
+                className="w-16 cursor-pointer h-1 rounded-none overflow-hidden accent-sky-500 bg-zinc-850"
               />
+              <span className="text-sky-400 text-[9px] font-semibold w-7 text-right">{Math.round(rainVolume * 100)}%</span>
             </div>
-          </div>
 
-          {/* Third slider & level metrics bar */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {/* Customizer Slider: VINYL CRACKLE */}
-            <div className="bg-zinc-900/40 p-2.5 border border-zinc-850/80 rounded-sm space-y-2">
-              <div className="flex justify-between items-center text-[9.5px]">
-                <span className="text-zinc-400 font-bold uppercase tracking-wider flex items-center gap-1">
-                  <Disc className="w-3 h-3 text-amber-500" />
-                  TIẾNG RÈ ĐĨA THAN
-                </span>
-                <span className="text-amber-400 font-semibold">{Math.round(vinylVolume * 100)}%</span>
+            {/* Sliders: VINYL */}
+            <div className="bg-zinc-905/40 p-1.5 px-2 border border-zinc-900 rounded-sm flex items-center gap-2">
+              <div className="flex items-center gap-1 text-[9px] font-bold text-zinc-400 select-none">
+                <Disc className="w-3 h-3 text-amber-500" />
+                <span>VINYL</span>
               </div>
               <input
                 type="range"
@@ -618,71 +620,33 @@ export default function LofiPlayer() {
                 step="0.05"
                 value={vinylVolume}
                 onChange={(e) => setVinylVolume(parseFloat(e.target.value))}
-                className="w-full cursor-pointer h-1 rounded-none overflow-hidden accent-amber-500"
+                className="w-16 cursor-pointer h-1 rounded-none overflow-hidden accent-amber-500 bg-zinc-850"
               />
-            </div>
-
-            {/* Simulated bouncing Audio Visualizer screen */}
-            <div className="bg-zinc-900/60 p-2 border border-zinc-850 rounded-sm flex flex-col justify-between">
-              <div className="text-[8.5px] text-zinc-500 uppercase tracking-widest font-semibold flex justify-between items-center px-1">
-                <span>SPECTRAL ANALYZER</span>
-                <span className="text-emerald-500 animate-pulse">● LIVE</span>
-              </div>
-              <div className="flex items-end justify-between h-7 px-2 pt-1 gap-1">
-                {vuLevels.map((lvl, i) => (
-                  <div key={i} className="flex-1 bg-zinc-800 h-full rounded-sm overflow-hidden flex flex-col justify-end">
-                    <div 
-                      className={`w-full transition-all duration-100 ${
-                        lvl > 75 
-                          ? 'bg-red-500' 
-                          : lvl > 50 
-                            ? 'bg-orange-400' 
-                            : 'bg-emerald-500'
-                      }`}
-                      style={{ height: `${isPlaying ? lvl : 8}%` }}
-                    />
-                  </div>
-                ))}
-              </div>
+              <span className="text-amber-400 text-[9px] font-semibold w-7 text-right">{Math.round(vinylVolume * 100)}%</span>
             </div>
           </div>
-        </div>
-      </div>
+        </>
+      )}
 
-      {/* Playlist tracks selection rack */}
-      <div className="bg-zinc-900 p-2 border border-zinc-850 rounded-sm z-10">
-        <div className="text-[9px] text-zinc-500 uppercase tracking-widest font-semibold pb-1.5 px-1">
-          CHỌN ALBUM / SOUNDTRACKS LOFI:
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
-          {LOFI_TRACKS.map((track, idx) => {
-            const isSelected = idx === currentTrackIndex;
-            return (
-              <button
-                key={track.id}
-                onClick={() => changeTrack(idx)}
-                className={`text-left p-2 rounded-sm border cursor-pointer transition-all duration-200 text-[10.5px] ${
-                  isSelected 
-                    ? 'bg-orange-500/10 border-orange-500/40 text-orange-400' 
-                    : 'bg-zinc-950 border-zinc-850 text-zinc-400 hover:text-zinc-200 hover:border-zinc-750'
-                }`}
-              >
-                <div className="font-bold flex items-center gap-1.5">
-                  <Music className="w-3 h-3 shrink-0" />
-                  <span className="truncate">{track.name}</span>
-                </div>
-                <div className="text-[9px] text-zinc-500 mt-0.5 truncate uppercase select-none">
-                  {track.artist}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-        
-        {/* Track descriptions helper message */}
-        <p className="text-[9.5px] text-zinc-500 mt-2 px-1 text-center select-none leading-relaxed italic">
-          💡 {currentTrack.desc || "Thư giãn đầu óc vỗ về năng lượng tập trung làm việc."}
-        </p>
+      {/* Resize Toggler far right */}
+      <div className="z-10 shrink-0 select-none">
+        <button
+          onClick={() => setIsCompact(!isCompact)}
+          className="flex items-center justify-center p-1 px-2.5 rounded-sm text-[9px] font-bold uppercase transition-all bg-zinc-900 hover:bg-zinc-800 text-zinc-450 hover:text-white border border-zinc-800 hover:border-zinc-700 cursor-pointer"
+          title={isCompact ? "Mở rộng" : "Thu nhỏ"}
+        >
+          {isCompact ? (
+            <div className="flex items-center gap-1 text-orange-400/90 hover:text-orange-400">
+              <Maximize2 className="w-3 h-3" />
+              <span>EXPAND</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1 text-zinc-500 hover:text-zinc-350">
+              <Minimize2 className="w-3 h-3" />
+              <span>COMPACT</span>
+            </div>
+          )}
+        </button>
       </div>
     </div>
   );

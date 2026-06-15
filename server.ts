@@ -676,10 +676,12 @@ for cmd in ps awk grep curl; do
   fi
 done
 
-# Initialize network metrics
+# Initialize network and CPU metrics
 PREV_RX=0
 PREV_TX=0
 PREV_TIME=\$(date +%s)
+PREV_TOTAL=0
+PREV_IDLE=0
 
 while true; do
   # 1. Hostname with safe fallback
@@ -714,39 +716,65 @@ while true; do
     CPU_MODEL=\$(uname -p 2>/dev/null || echo "ARM/Intel Processor")
   fi
 
-  # 5. CPU load calculations (handling missing files gracefully)
-  CPU_LOAD_PCT=5
-  if [ -f /proc/loadavg ]; then
-    L_AVG=\$(cat /proc/loadavg | awk '{print \$1}')
-    CPU_LOAD_PCT=\$(awk -v l="\$L_AVG" -v c="\$CPU_CORES" 'BEGIN {print int((l/c)*100)}')
-    if [ "\$CPU_LOAD_PCT" -gt 100 ]; then
-       CPU_LOAD_PCT=100
+  # 5. CPU load calculations (accurate real-time CPU % from /proc/stat)
+  CPU_LOAD_PCT=10
+  if [ -f /proc/stat ]; then
+    read -r cpu user nice system idle iowait irq softirq steal guest guest_nice < /proc/stat
+    CURR_IDLE=\$((idle + iowait))
+    CURR_TOTAL=\$((user + nice + system + idle + iowait + irq + softirq + steal))
+    
+    DIFF_TOTAL=\$((CURR_TOTAL - PREV_TOTAL))
+    DIFF_IDLE=\$((CURR_IDLE - PREV_IDLE))
+    
+    if [ "\$PREV_TOTAL" -gt 0 ] && [ "\$DIFF_TOTAL" -gt 0 ]; then
+      CPU_LOAD_PCT=\$(( 100 * (DIFF_TOTAL - DIFF_IDLE) / DIFF_TOTAL ))
+    else
+      # Simple fallback for the very first reading
+      CPU_LOAD_PCT=\$(ps -A -o pcpu 2>/dev/null | awk '{s+=\$1} END {print int(s)}')
     fi
-    if [ "\$CPU_LOAD_PCT" -lt 1 ]; then
-       CPU_LOAD_PCT=1
-    fi
+    
+    [ -z "\$CPU_LOAD_PCT" ] && CPU_LOAD_PCT=5
+    [ "\$CPU_LOAD_PCT" -gt 100 ] && CPU_LOAD_PCT=100
+    [ "\$CPU_LOAD_PCT" -lt 0 ] && CPU_LOAD_PCT=0
+    
+    PREV_TOTAL=\$CURR_TOTAL
+    PREV_IDLE=\$CURR_IDLE
   else
     CPU_LOAD_PCT=\$(ps -A -o pcpu 2>/dev/null | awk '{s+=\$1} END {print int(s)}')
     [ -z "\$CPU_LOAD_PCT" ] && CPU_LOAD_PCT=10
   fi
 
-  # 6. RAM usage from /proc/meminfo
+  # 6. RAM usage from /proc/meminfo (accounting for MemAvailable to match free/htop)
   MEM_TOTAL_KB=16384000
   MEM_FREE_KB=8000000
   MEM_BUFF_KB=0
   MEM_CACH_KB=0
+  MEM_AVAIL_KB=""
   if [ -f /proc/meminfo ]; then
     MEM_TOTAL_KB=\$(grep MemTotal /proc/meminfo | awk '{print \$2}')
     MEM_FREE_KB=\$(grep MemFree /proc/meminfo | awk '{print \$2}')
-    MEM_BUFF_KB=\$(grep -E 'Buffers' /proc/meminfo | awk '{print \$2}')
-    MEM_CACH_KB=\$(grep -E '^Cached' /proc/meminfo | awk '{print \$2}')
+    MEM_BUFF_KB=\$(grep -E '^Buffers:' /proc/meminfo | awk '{print \$2}')
+    MEM_CACH_KB=\$(grep -E '^Cached:' /proc/meminfo | awk '{print \$2}')
+    MEM_AVAIL_KB=\$(grep MemAvailable /proc/meminfo | awk '{print \$2}')
   fi
   [ -z "\$MEM_TOTAL_KB" ] && MEM_TOTAL_KB=16384000
   [ -z "\$MEM_FREE_KB" ] && MEM_FREE_KB=8000000
   [ -z "\$MEM_BUFF_KB" ] && MEM_BUFF_KB=0
   [ -z "\$MEM_CACH_KB" ] && MEM_CACH_KB=0
 
-  MEM_USED_KB=\$((MEM_TOTAL_KB - MEM_FREE_KB - MEM_BUFF_KB - MEM_CACH_KB))
+  if [ -n "\$MEM_AVAIL_KB" ]; then
+    MEM_USED_KB=\$((MEM_TOTAL_KB - MEM_AVAIL_KB))
+  else
+    MEM_USED_KB=\$((MEM_TOTAL_KB - MEM_FREE_KB - MEM_BUFF_KB - MEM_CACH_KB))
+  fi
+
+  if [ "\$MEM_USED_KB" -lt 0 ]; then
+    MEM_USED_KB=0
+  fi
+  if [ "\$MEM_USED_KB" -gt "\$MEM_TOTAL_KB" ]; then
+    MEM_USED_KB=\$MEM_TOTAL_KB
+  fi
+
   RAM_TOTAL=\$(awk -v t="\$MEM_TOTAL_KB" 'BEGIN {printf "%.1f", t/1048576}')
   RAM_USED=\$(awk -v u="\$MEM_USED_KB" 'BEGIN {printf "%.2f", u/1048576}')
 
