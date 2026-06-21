@@ -58,6 +58,23 @@ setInterval(() => {
   serverUptimeSeconds++;
 }, 1000);
 
+const CLOCK_TICKS_PER_SECOND = 100;
+const PAGE_SIZE_BYTES = 4096;
+
+type CpuSnapshot = {
+  idle: number;
+  total: number;
+};
+
+type ProcessSnapshot = {
+  cpuTicks: number;
+  totalTicks: number;
+};
+
+let previousCpuSnapshot: CpuSnapshot | null = null;
+let previousProcessSnapshots = new Map<number, ProcessSnapshot>();
+let passwdUserCache: Map<number, string> | null = null;
+
 // Auxiliary functions to shell exec
 function getOSRelease(): Promise<string> {
   return new Promise((resolve) => {
@@ -178,51 +195,294 @@ function getDiskUsage(): Promise<number> {
   });
 }
 
-function getRealProcesses(): Promise<SystemProcess[]> {
-  return new Promise((resolve) => {
-    // Only run on non-win32 platforms
-    if (os.platform() === "win32") {
-      resolve([]);
-      return;
+function readCpuSnapshot(): CpuSnapshot | null {
+  try {
+    const line = fs.readFileSync("/proc/stat", "utf8").split("\n")[0];
+    const values = line.trim().split(/\s+/).slice(1).map(Number);
+    if (values.length < 4 || values.some(Number.isNaN)) {
+      return null;
     }
 
-    // Command to get columns: pid, pcpu, pmem, comm, user (skip header)
-    exec("ps -eo pid,pcpu,pmem,comm,user --no-headers --sort=-pcpu", (err, stdout) => {
-      if (err || !stdout) {
-        resolve([]);
-        return;
-      }
+    const idle = values[3] + (values[4] || 0);
+    const total = values.reduce((sum, value) => sum + value, 0);
+    return { idle, total };
+  } catch (e) {
+    return null;
+  }
+}
 
-      const lines = stdout.trim().split("\n");
-      const list: SystemProcess[] = [];
+function getCpuLoadPercent(): number {
+  if (os.platform() !== "linux") {
+    const loadAvg = os.loadavg();
+    return Math.min(100, Math.max(0, Math.round((loadAvg[0] / os.cpus().length) * 100) || 0));
+  }
 
-      for (let i = 0; i < Math.min(lines.length, 12); i++) {
-        const line = lines[i].trim();
-        const parts = line.split(/\s+/);
-        if (parts.length >= 5) {
-          const pid = parseInt(parts[0], 10);
-          const cpu = parseFloat(parts[1]);
-          const ram = parseFloat(parts[2]);
-          const name = parts[3];
-          const user = parts[4];
+  const current = readCpuSnapshot();
+  if (!current) {
+    return 0;
+  }
 
-          if (!isNaN(pid)) {
-            list.push({
-              pid,
-              name: path.basename(name || "process"),
-              cpu: isNaN(cpu) ? 0 : cpu,
-              ram: isNaN(ram) ? 0 : ram,
-              status: "RUNNING",
-              user: user || "root",
-              nice: 0,
-              uptimeSeconds: 0, // Mocked/unknown
-            });
-          }
+  if (!previousCpuSnapshot) {
+    previousCpuSnapshot = current;
+    const loadAvg = os.loadavg();
+    return Math.min(100, Math.max(0, Math.round((loadAvg[0] / os.cpus().length) * 100) || 0));
+  }
+
+  const totalDelta = current.total - previousCpuSnapshot.total;
+  const idleDelta = current.idle - previousCpuSnapshot.idle;
+  previousCpuSnapshot = current;
+
+  if (totalDelta <= 0) {
+    return 0;
+  }
+
+  return Math.min(100, Math.max(0, Math.round(((totalDelta - idleDelta) / totalDelta) * 100)));
+}
+
+function getPasswdUserMap(): Map<number, string> {
+  if (passwdUserCache) {
+    return passwdUserCache;
+  }
+
+  passwdUserCache = new Map<number, string>();
+  try {
+    const passwd = fs.readFileSync("/etc/passwd", "utf8");
+    for (const line of passwd.split("\n")) {
+      const parts = line.split(":");
+      if (parts.length > 2) {
+        const uid = parseInt(parts[2], 10);
+        if (!Number.isNaN(uid)) {
+          passwdUserCache.set(uid, parts[0]);
         }
       }
-      resolve(list);
+    }
+  } catch (e) {}
+
+  return passwdUserCache;
+}
+
+function getProcessUser(pid: number): string {
+  try {
+    const status = fs.readFileSync(`/proc/${pid}/status`, "utf8");
+    const uidMatch = status.match(/^Uid:\s+(\d+)/m);
+    if (!uidMatch) {
+      return "unknown";
+    }
+    const uid = parseInt(uidMatch[1], 10);
+    return getPasswdUserMap().get(uid) || String(uid);
+  } catch (e) {
+    return "unknown";
+  }
+}
+
+function parseProcStat(pid: number): { state: string; cpuTicks: number; nice: number; startTimeTicks: number } | null {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+    const endOfName = stat.lastIndexOf(")");
+    if (endOfName < 0) {
+      return null;
+    }
+
+    const fields = stat.slice(endOfName + 2).trim().split(/\s+/);
+    const state = fields[0] || "?";
+    const userTicks = parseInt(fields[11], 10);
+    const systemTicks = parseInt(fields[12], 10);
+    const nice = parseInt(fields[16], 10);
+    const startTimeTicks = parseInt(fields[19], 10);
+
+    if ([userTicks, systemTicks, nice, startTimeTicks].some(Number.isNaN)) {
+      return null;
+    }
+
+    return {
+      state,
+      cpuTicks: userTicks + systemTicks,
+      nice,
+      startTimeTicks,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function getProcessName(pid: number): string {
+  try {
+    return fs.readFileSync(`/proc/${pid}/comm`, "utf8").trim() || "process";
+  } catch (e) {
+    return "process";
+  }
+}
+
+function getProcessCommand(pid: number): string {
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ").trim();
+  } catch (e) {
+    return "";
+  }
+}
+
+function getProcessRamPercent(pid: number): number {
+  try {
+    const statm = fs.readFileSync(`/proc/${pid}/statm`, "utf8").trim().split(/\s+/);
+    const residentPages = parseInt(statm[1], 10);
+    if (Number.isNaN(residentPages)) {
+      return 0;
+    }
+    return parseFloat(((residentPages * PAGE_SIZE_BYTES / os.totalmem()) * 100).toFixed(1));
+  } catch (e) {
+    return 0;
+  }
+}
+
+function getProcessStatusLabel(state: string): string {
+  switch (state) {
+    case "R":
+      return "RUNNING";
+    case "S":
+      return "SLEEPING";
+    case "D":
+      return "WAITING";
+    case "T":
+    case "t":
+      return "STOPPED";
+    case "Z":
+      return "ZOMBIE";
+    default:
+      return "RUNNING";
+  }
+}
+
+function getRealProcesses(totalTicks: number): SystemProcess[] {
+  if (os.platform() !== "linux") {
+    return [];
+  }
+
+  const currentSnapshots = new Map<number, ProcessSnapshot>();
+  const processList: SystemProcess[] = [];
+
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync("/proc");
+  } catch (e) {
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) {
+      continue;
+    }
+
+    const pid = parseInt(entry, 10);
+    const stat = parseProcStat(pid);
+    if (!stat) {
+      continue;
+    }
+
+    const previous = previousProcessSnapshots.get(pid);
+    const cpuDelta = previous ? stat.cpuTicks - previous.cpuTicks : 0;
+    const totalDelta = previous ? totalTicks - previous.totalTicks : 0;
+    const cpu = totalDelta > 0 ? (cpuDelta / totalDelta) * os.cpus().length * 100 : 0;
+
+    currentSnapshots.set(pid, {
+      cpuTicks: stat.cpuTicks,
+      totalTicks,
     });
-  });
+
+    processList.push({
+      pid,
+      name: path.basename(getProcessName(pid)),
+      cpu: parseFloat(Math.max(0, cpu).toFixed(1)),
+      ram: getProcessRamPercent(pid),
+      status: getProcessStatusLabel(stat.state),
+      user: getProcessUser(pid),
+      nice: stat.nice,
+      uptimeSeconds: Math.max(0, Math.round(os.uptime() - (stat.startTimeTicks / CLOCK_TICKS_PER_SECOND))),
+    });
+  }
+
+  previousProcessSnapshots = currentSnapshots;
+  return processList
+    .sort((a, b) => b.cpu - a.cpu || b.ram - a.ram)
+    .slice(0, 12);
+}
+
+const BROWSER_PROCESS_PATTERN = /firefox|chrome|chromium|coccoc|brave|vivaldi|isolated web co|web content/i;
+
+function getLiveProcessSample(): SystemProcess[] {
+  getCpuLoadPercent();
+  return getRealProcesses(previousCpuSnapshot?.total || 0);
+}
+
+function terminateProcess(pid: number, signal: NodeJS.Signals = "SIGTERM"): boolean {
+  if (!Number.isFinite(pid) || pid <= 0 || pid === process.pid) {
+    return false;
+  }
+
+  try {
+    process.kill(pid, signal);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+function getBrowserCpuHogs(processes: SystemProcess[]): SystemProcess[] {
+  return processes
+    .filter(proc => BROWSER_PROCESS_PATTERN.test(proc.name) && proc.cpu >= 25)
+    .sort((a, b) => b.cpu - a.cpu)
+    .slice(0, 8);
+}
+
+function getHeadlessAutomationLeftovers(): SystemProcess[] {
+  if (os.platform() !== "linux") {
+    return [];
+  }
+
+  let entries: string[] = [];
+  try {
+    entries = fs.readdirSync("/proc");
+  } catch (e) {
+    return [];
+  }
+
+  const leftovers: SystemProcess[] = [];
+  for (const entry of entries) {
+    if (!/^\d+$/.test(entry)) {
+      continue;
+    }
+
+    const pid = parseInt(entry, 10);
+    if (pid === process.pid) {
+      continue;
+    }
+
+    const command = getProcessCommand(pid);
+    if (!command) {
+      continue;
+    }
+
+    const isHeadlessFirefox = /firefox-esr|firefox/i.test(command)
+      && (/\s-headless\b/.test(command) || /juggler-pipe|sync-firefox-profile/i.test(command));
+    const isPlaywrightMcp = /playwright-mcp/i.test(command) && /--headless|--browser=firefox/i.test(command);
+
+    if (!isHeadlessFirefox && !isPlaywrightMcp) {
+      continue;
+    }
+
+    const stat = parseProcStat(pid);
+    leftovers.push({
+      pid,
+      name: path.basename(getProcessName(pid)),
+      cpu: 0,
+      ram: getProcessRamPercent(pid),
+      status: stat ? getProcessStatusLabel(stat.state) : "RUNNING",
+      user: getProcessUser(pid),
+      nice: stat?.nice ?? 0,
+      uptimeSeconds: stat ? Math.max(0, Math.round(os.uptime() - (stat.startTimeTicks / CLOCK_TICKS_PER_SECOND))) : 0,
+    });
+  }
+
+  return leftovers.sort((a, b) => b.ram - a.ram).slice(0, 24);
 }
 
 function getCpuTemperature(cpuLoadPercent: number): Promise<number> {
@@ -298,12 +558,8 @@ async function startServer() {
         return;
       }
 
-      const liveProcs = await getRealProcesses();
-      const loadAvg = os.loadavg();
-      const cpuLoadPercent = Math.min(
-        100,
-        Math.round((loadAvg[0] / os.cpus().length) * 100) || 5
-      );
+      const cpuLoadPercent = getCpuLoadPercent();
+      const liveProcs = getRealProcesses(previousCpuSnapshot?.total || 0);
 
       const totalMemGb = os.totalmem() / (1024 * 1024 * 1024);
       const freeMemGb = os.freemem() / (1024 * 1024 * 1024);
@@ -359,6 +615,7 @@ async function startServer() {
     try {
       const { selectedTargets } = req.body;
       const targets = selectedTargets || ["node", "vite", "react", "ollama", "tmp_logs", "stale_apps"];
+      const liveProcessSample = getLiveProcessSample();
       
       const responseDetails: Record<string, { reclaimedMb: number; tasksKilled: number; details: string }> = {};
       
@@ -420,6 +677,57 @@ async function startServer() {
           reclaimedMb: Math.round(14 + Math.random() * 12) + (actualCleanedLogs * 0.5),
           tasksKilled: actualCleanedLogs > 0 ? actualCleanedLogs : Math.floor(Math.random() * 4) + 1,
           details: `Xóa sạch các file nhật ký đệm (.log & .tmp) cũ phân rác trong thư mục hệ thống /tmp.`
+        };
+      }
+
+      // Browser tab/content processes are often the real CPU hogs on this host.
+      if (targets.includes("browser_hogs")) {
+        const hogs = getBrowserCpuHogs(liveProcessSample);
+        const terminated: SystemProcess[] = [];
+
+        hogs.forEach(proc => {
+          pendingAgentCommands.push(`kill -TERM ${proc.pid}`);
+          if (terminateProcess(proc.pid, "SIGTERM")) {
+            terminated.push(proc);
+          }
+        });
+
+        const reclaimedMb = Math.round(
+          terminated.reduce((sum, proc) => sum + ((proc.ram / 100) * os.totalmem() / (1024 * 1024)), 0)
+        );
+        const targetSummary = hogs.length > 0
+          ? hogs.map(proc => `${proc.name}[${proc.pid}] ${proc.cpu.toFixed(1)}%`).join(", ")
+          : "không có browser process nào vượt ngưỡng 25% CPU";
+
+        responseDetails["browser_hogs"] = {
+          reclaimedMb,
+          tasksKilled: terminated.length,
+          details: `Đã rà browser CPU hogs: ${targetSummary}. Dùng SIGTERM để đóng mềm process/tab đang quá tải, tránh đụng Codex và server app.`
+        };
+      }
+
+      if (targets.includes("headless_automation")) {
+        const leftovers = getHeadlessAutomationLeftovers();
+        const terminated: SystemProcess[] = [];
+
+        leftovers.forEach(proc => {
+          pendingAgentCommands.push(`kill -TERM ${proc.pid}`);
+          if (terminateProcess(proc.pid, "SIGTERM")) {
+            terminated.push(proc);
+          }
+        });
+
+        const reclaimedMb = Math.round(
+          terminated.reduce((sum, proc) => sum + ((proc.ram / 100) * os.totalmem() / (1024 * 1024)), 0)
+        );
+        const targetSummary = leftovers.length > 0
+          ? leftovers.map(proc => `${proc.name}[${proc.pid}]`).join(", ")
+          : "không còn process headless automation mồ côi";
+
+        responseDetails["headless_automation"] = {
+          reclaimedMb,
+          tasksKilled: terminated.length,
+          details: `Dọn Firefox/Playwright headless cũ: ${targetSummary}. Chỉ match -headless, juggler-pipe, sync-firefox-profile hoặc playwright-mcp.`
         };
       }
 
@@ -590,6 +898,14 @@ Yêu cầu báo cáo phân tích:
     const resolvedIp = ipAddress || req.ip || "127.0.0.1";
     const resolvedSwapTotal = typeof swapTotal === "number" ? swapTotal : parseFloat(swapTotal || "0");
     const resolvedSwapUsed = typeof swapUsed === "number" ? swapUsed : parseFloat(swapUsed || "0");
+    const resolvedCpuLoad = typeof cpuLoad === "number" ? cpuLoad : parseFloat(cpuLoad || "10");
+    const resolvedRamUsed = typeof ramUsed === "number" ? ramUsed : parseFloat(ramUsed || "4.2");
+    const resolvedRamTotal = typeof ramTotal === "number" ? ramTotal : parseFloat(ramTotal || "16");
+    const resolvedDiskUsed = typeof diskUsed === "number" ? diskUsed : parseFloat(diskUsed || "50");
+    const resolvedCpuTemp = typeof cpuTemp === "number" ? cpuTemp : parseFloat(cpuTemp || "42");
+    const resolvedGpuTemp = typeof gpuTemp === "number" ? gpuTemp : parseFloat(gpuTemp || String(Math.max(30, resolvedCpuTemp - 4)));
+    const resolvedFanSpeed = typeof fanSpeed === "number" ? fanSpeed : parseFloat(fanSpeed || "1500");
+    const resolvedPowerDraw = typeof powerDraw === "number" ? powerDraw : parseFloat(powerDraw || "45");
 
     localAgentData = {
       hostname,
@@ -603,14 +919,14 @@ Yêu cầu báo cáo phân tích:
       ipAddress: resolvedIp,
       processes: processes || [],
       sensors: {
-        cpuTemp: cpuTemp || 42,
-        gpuTemp: gpuTemp || (cpuTemp ? Math.max(30, cpuTemp - 4) : 38),
-        fanSpeed: fanSpeed || 1500,
-        powerDraw: powerDraw || 45,
-        cpuLoad: cpuLoad || 10,
-        ramUsed: ramUsed || 4.2,
-        ramTotal: ramTotal || 16,
-        diskUsed: diskUsed || 50,
+        cpuTemp: resolvedCpuTemp,
+        gpuTemp: resolvedGpuTemp,
+        fanSpeed: resolvedFanSpeed,
+        powerDraw: resolvedPowerDraw,
+        cpuLoad: resolvedCpuLoad,
+        ramUsed: resolvedRamUsed,
+        ramTotal: resolvedRamTotal,
+        diskUsed: resolvedDiskUsed,
         networkKbps: networkKbps || { up: 10, down: 50 },
         swapTotal: resolvedSwapTotal,
         swapUsed: resolvedSwapUsed,

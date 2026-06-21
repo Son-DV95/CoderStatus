@@ -202,6 +202,14 @@ export default function HtopMonitor({
       setCleanLogs(prev => [...prev, '[QUÉT] Đóng triệt tàn dư zombie cụm DarkLust & RPChat...']);
       await sleep(350);
     }
+    if (cleanTargets.includes('browser_hogs')) {
+      setCleanLogs(prev => [...prev, '[QUÉT] Tìm Firefox/Chrome content process đang ngốn CPU để đóng mềm...']);
+      await sleep(350);
+    }
+    if (cleanTargets.includes('headless_automation')) {
+      setCleanLogs(prev => [...prev, '[QUÉT] Tìm Firefox/Playwright headless automation mồ côi...']);
+      await sleep(350);
+    }
 
     try {
       const res = await fetch('/api/deep-clean', {
@@ -427,6 +435,30 @@ export default function HtopMonitor({
                 className="accent-amber-500 cursor-pointer"
               />
               <span className="text-zinc-400 text-[10px]">Nhật ký tạm hệ thống (/tmp/*.log)</span>
+            </label>
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={cleanTargets.includes('browser_hogs')}
+                onChange={() => {
+                  playTick();
+                  setCleanTargets(prev => prev.includes('browser_hogs') ? prev.filter(t => t !== 'browser_hogs') : [...prev, 'browser_hogs']);
+                }}
+                className="accent-amber-500 cursor-pointer"
+              />
+              <span className="text-amber-300 text-[10px] font-bold">Browser CPU hogs (đóng tab/process cao)</span>
+            </label>
+            <label className="flex items-center gap-1.5 hover:text-white cursor-pointer select-none">
+              <input 
+                type="checkbox" 
+                checked={cleanTargets.includes('headless_automation')}
+                onChange={() => {
+                  playTick();
+                  setCleanTargets(prev => prev.includes('headless_automation') ? prev.filter(t => t !== 'headless_automation') : [...prev, 'headless_automation']);
+                }}
+                className="accent-amber-500 cursor-pointer"
+              />
+              <span className="text-emerald-300 text-[10px] font-bold">Headless automation cũ (Firefox/Playwright)</span>
             </label>
           </div>
 
